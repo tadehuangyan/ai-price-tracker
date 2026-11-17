@@ -7,7 +7,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .database import Base, SessionLocal, engine
 from .models import DataSource, SensitiveWord, SystemConfig, SystemLog, User
-from .routers import admin, ai, auth, compare, products, tracking
+from .routers import admin, ai, auth, compare, mail, products, tracking
 from .scheduler import start_scheduler
 from .security import hash_password
 
@@ -87,6 +87,7 @@ app.add_middleware(
 )
 
 app.include_router(auth.router)
+app.include_router(mail.router)
 app.include_router(products.router)
 app.include_router(tracking.router)
 app.include_router(compare.router)

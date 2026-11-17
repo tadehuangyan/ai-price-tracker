@@ -6,6 +6,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..models import Alert, Listing, Product, Tracking, User
+from .mailer import send_mail
 
 
 def check_price_alerts(db: Session) -> int:
@@ -50,6 +51,18 @@ def check_price_alerts(db: Session) -> int:
                 target_price=tracking.target_price,
                 message=msg,
             )
+        )
+        send_mail(  # 模拟邮箱：同步投递降价提醒邮件
+            db,
+            to_email=user.email,
+            user_id=user.id,
+            category="price_alert",
+            subject="【模拟邮箱】降价提醒",
+            body=(
+                f"{msg}\n\n当前最低价：{price:.2f} 元\n"
+                f"你的目标价：{tracking.target_price:.2f} 元\n"
+                f"（本邮件由模拟邮箱沙箱投递，不会真实发送）"
+            ),
         )
         created += 1
     if created:

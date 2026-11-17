@@ -8,6 +8,7 @@ from ..database import get_db
 from ..deps import get_current_user
 from ..models import Alert, Listing, PriceSnapshot, Product, Tracking, User
 from ..schemas import TrackingIn
+from ..services.mailer import send_mail
 
 router = APIRouter(prefix="/api/tracking", tags=["价格追踪"])
 
@@ -40,6 +41,18 @@ def add_tracking(
         if body.target_price is not None:
             exists.target_price = body.target_price
             db.commit()
+            send_mail(  # 模拟邮箱：目标价调整通知
+                db,
+                to_email=user.email,
+                user_id=user.id,
+                category="subscribe",
+                subject="【模拟邮箱】追踪目标价调整",
+                body=(
+                    f"你已将「{product.name}」的追踪目标价调整为 {body.target_price:.2f} 元，"
+                    f"价格达到目标价时将向你推送降价提醒。\n（本邮件由模拟邮箱沙箱投递，不会真实发送）"
+                ),
+            )
+            db.commit()
         return {"ok": True, "message": "该商品已在追踪中，目标价已更新"}
     count = db.query(Tracking).filter(Tracking.user_id == user.id).count()
     if count >= MAX_TRACK_PER_USER:
@@ -48,6 +61,20 @@ def add_tracking(
         raise HTTPException(400, "目标价格须大于 0")
     db.add(
         Tracking(user_id=user.id, product_id=body.product_id, target_price=body.target_price)
+    )
+    db.commit()
+    target_desc = f"目标价 {body.target_price:.2f} 元" if body.target_price is not None else "暂未设置目标价"
+    send_mail(  # 模拟邮箱：订阅确认邮件
+        db,
+        to_email=user.email,
+        user_id=user.id,
+        category="subscribe",
+        subject="【模拟邮箱】价格追踪订阅确认",
+        body=(
+            f"你已成功订阅「{product.name}」的价格追踪（{target_desc}）。\n"
+            f"价格发生变动或达到目标价时，系统将向你发送降价提醒。\n"
+            f"（本邮件由模拟邮箱沙箱投递，不会真实发送）"
+        ),
     )
     db.commit()
     return {"ok": True, "message": "已加入价格追踪"}

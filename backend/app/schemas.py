@@ -11,6 +11,7 @@ class RegisterIn(BaseModel):
     password: str = Field(min_length=8, max_length=64)
     email: EmailStr
     nickname: Optional[str] = None
+    code: Optional[str] = None  # 模拟邮箱验证码
 
 
 class LoginIn(BaseModel):
@@ -23,6 +24,17 @@ class ProfileUpdate(BaseModel):
     nickname: Optional[str] = None
     email: Optional[EmailStr] = None
     password: Optional[str] = None
+    email_code: Optional[str] = None  # 换绑邮箱验证码
+    password_code: Optional[str] = None  # 修改密码验证码
+
+
+class SendCodeIn(BaseModel):
+    email: EmailStr
+    purpose: str = Field(pattern="^(register|email_change|password_change)$")
+
+
+class VerifyCodeIn(SendCodeIn):
+    code: str = Field(min_length=6, max_length=6)
 
 
 class UserOut(BaseModel):

@@ -16,6 +16,22 @@ const props = withDefaults(
   { height: 300, title: '历史价格走势', compareSeries: () => [] }
 )
 
+// —— 标本手记色板（与 style.css 保持一致） ——
+const C = {
+  ink: '#26231c',
+  inkSoft: '#5c5546',
+  inkFaint: '#8d8574',
+  line: '#d9d0bc',
+  lineStrong: '#b9aa8e',
+  green: '#3c5a45',
+  pin: '#b0603c',
+  sage: '#93a596',
+  paper2: '#fbf8ef',
+}
+const MONO = '"JetBrains Mono", "SFMono-Regular", Consolas, monospace'
+// 对比线序列配色：墨绿 / 朱砂 / 墨 / 苔绿，绝不用默认蓝
+const PALETTE = ['#3c5a45', '#b0603c', '#26231c', '#93a596', '#8d8574', '#5d7a66']
+
 const el = ref<HTMLDivElement>()
 let chart: echarts.ECharts | null = null
 
@@ -29,14 +45,18 @@ function render() {
     const dateSet = new Set<string>()
     props.compareSeries.forEach((s) => s.data.forEach((d) => dateSet.add(d.date)))
     categories = [...dateSet].sort()
-    series = props.compareSeries.map((s) => {
+    series = props.compareSeries.map((s, i) => {
       const map = new Map(s.data.map((d) => [d.date, d.price]))
+      const color = PALETTE[i % PALETTE.length]
       return {
         name: s.name,
         type: 'line',
         smooth: true,
         showSymbol: false,
         data: categories.map((c) => map.get(c) ?? null),
+        lineStyle: { width: 2, color, shadowBlur: 6, shadowColor: 'rgba(38, 35, 28, 0.18)' },
+        itemStyle: { color },
+        emphasis: { focus: 'series' },
       }
     })
   } else {
@@ -52,14 +72,37 @@ function render() {
         smooth: true,
         showSymbol: false,
         data: prices,
+        // 描线感：墨绿主线 + 轻微墨晕
+        lineStyle: { width: 2, color: C.green, shadowBlur: 8, shadowColor: 'rgba(60, 90, 69, 0.28)' },
+        itemStyle: { color: C.green },
         markPoint: {
           data: [
-            { type: 'max', name: '最高价' },
-            { type: 'min', name: '最低价' },
+            {
+              type: 'max',
+              name: '最高价',
+              itemStyle: { color: C.sage },
+              label: { color: C.paper2, fontFamily: MONO, fontSize: 10 },
+            },
+            {
+              type: 'min',
+              name: '最低价',
+              itemStyle: { color: C.pin },
+              label: { color: C.paper2, fontFamily: MONO, fontSize: 10 },
+            },
           ],
+          symbolSize: 34,
         },
-        markLine: current != null ? { data: [{ yAxis: current, name: '当前价' }], silent: true } : undefined,
-        areaStyle: { opacity: 0.12 },
+        markLine:
+          current != null
+            ? {
+                data: [{ yAxis: current, name: '当前价' }],
+                silent: true,
+                symbol: 'none',
+                lineStyle: { color: C.lineStrong, type: 'dashed', width: 1 },
+                label: { color: C.inkFaint, fontFamily: MONO, fontSize: 10, formatter: '{b} ￥{c}' },
+              }
+            : undefined,
+        areaStyle: { color: 'rgba(60, 90, 69, 0.10)' },
       },
     ]
     void min
@@ -68,12 +111,49 @@ function render() {
 
   chart.setOption(
     {
-      title: { text: props.title, left: 0, textStyle: { fontSize: 14 } },
-      tooltip: { trigger: 'axis', valueFormatter: (v: any) => (v == null ? '-' : '￥' + v) },
-      legend: useCompare ? { top: 0, right: 0 } : undefined,
+      color: PALETTE,
+      animation: true,
+      animationDuration: 1600,
+      animationEasing: 'cubicOut',
+      animationDurationUpdate: 600,
+      textStyle: { fontFamily: MONO, color: C.inkFaint },
+      title: {
+        text: props.title,
+        left: 0,
+        top: 0,
+        textStyle: { fontSize: 13, fontWeight: 600, color: C.inkSoft },
+      },
+      tooltip: {
+        trigger: 'axis',
+        backgroundColor: C.paper2,
+        borderColor: C.line,
+        borderWidth: 1,
+        borderRadius: 3,
+        padding: [8, 12],
+        textStyle: { color: C.ink, fontSize: 12 },
+        extraCssText:
+          'box-shadow: 0 2px 4px rgba(70, 58, 36, 0.07), 0 10px 26px rgba(70, 58, 36, 0.09);',
+        valueFormatter: (v: any) => (v == null ? '-' : '￥' + v),
+      },
+      legend: useCompare
+        ? { top: 0, right: 0, itemWidth: 16, itemHeight: 3, textStyle: { color: C.inkFaint, fontSize: 11, fontFamily: MONO } }
+        : undefined,
       grid: { left: 55, right: 20, top: 50, bottom: 35 },
-      xAxis: { type: 'category', data: categories, axisLabel: { hideOverlap: true } },
-      yAxis: { type: 'value', axisLabel: { formatter: '￥{value}' } },
+      xAxis: {
+        type: 'category',
+        data: categories,
+        boundaryGap: false,
+        axisLine: { lineStyle: { color: C.line } },
+        axisTick: { show: true, length: 4, lineStyle: { color: C.line } },
+        axisLabel: { hideOverlap: true, color: C.inkFaint, fontSize: 10, fontFamily: MONO, margin: 12 },
+      },
+      yAxis: {
+        type: 'value',
+        axisLine: { show: false },
+        axisTick: { show: false },
+        axisLabel: { formatter: '￥{value}', color: C.inkFaint, fontSize: 10, fontFamily: MONO },
+        splitLine: { lineStyle: { color: C.line, type: 'dashed' } },
+      },
       series,
     },
     true

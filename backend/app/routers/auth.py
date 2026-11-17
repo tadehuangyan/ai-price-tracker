@@ -8,6 +8,7 @@ from ..deps import get_current_user
 from ..models import Product, Tracking, User
 from ..schemas import LoginIn, ProfileUpdate, RegisterIn, UserOut
 from ..security import create_token, hash_password, verify_password
+from ..services.mailer import check_verification_code, send_mail
 
 router = APIRouter(prefix="/api/auth", tags=["用户管理"])
 
@@ -27,6 +28,8 @@ def register(body: RegisterIn, db: Session = Depends(get_db)):
         raise HTTPException(400, "用户名已存在")
     if db.query(User).filter(User.email == body.email).first():
         raise HTTPException(400, "该邮箱已被注册")
+    if not check_verification_code(db, body.email, "register", getattr(body, "code", None)):
+        raise HTTPException(400, "邮箱验证码错误或已过期，请先获取验证码")
 
     user = User(
         username=body.username,
@@ -71,17 +74,38 @@ def update_profile(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """REQ-SPT-103 个人信息管理"""
+    """REQ-SPT-103 个人信息管理（换绑邮箱/修改密码需模拟邮箱验证码）"""
     if body.nickname is not None:
         user.nickname = body.nickname
     if body.email is not None and body.email != user.email:
         if db.query(User).filter(User.email == body.email).first():
             raise HTTPException(400, "该邮箱已被注册")
+        if not check_verification_code(db, body.email, "email_change", body.email_code):
+            raise HTTPException(400, "新邮箱验证码错误或已过期，请先获取验证码")
+        old_email = user.email
         user.email = body.email
+        send_mail(
+            db,
+            to_email=old_email,
+            user_id=user.id,
+            category="system",
+            subject="【模拟邮箱】邮箱换绑通知",
+            body=f"你的账号绑定邮箱已由 {old_email} 变更为 {body.email}。如非本人操作请及时联系管理员。",
+        )
     if body.password:
         if not (re.search(r"[A-Za-z]", body.password) and re.search(r"\d", body.password)) or len(body.password) < 8:
             raise HTTPException(400, "密码不少于 8 位且须同时包含字母与数字")
+        if not check_verification_code(db, user.email, "password_change", body.password_code):
+            raise HTTPException(400, "密码修改验证码错误或已过期，请先获取验证码")
         user.password_hash = hash_password(body.password)
+        send_mail(
+            db,
+            to_email=user.email,
+            user_id=user.id,
+            category="system",
+            subject="【模拟邮箱】密码修改通知",
+            body="你的账号密码已修改。如非本人操作请及时联系管理员。",
+        )
     db.commit()
     return {"ok": True, "message": "修改成功"}
 

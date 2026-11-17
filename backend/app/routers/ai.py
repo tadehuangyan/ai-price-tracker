@@ -1,11 +1,14 @@
-from fastapi import APIRouter, Depends, File, Request, UploadFile
+from fastapi import APIRouter, Depends, File, UploadFile
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
+
+import json
 
 from ..database import get_db
 from ..deps import get_current_user
 from ..models import User
-from ..services.ai_advisor import chat_reply
+from ..services.ai_advisor import chat_reply, chat_reply_stream
 from ..services.moderation import find_sensitive
 
 router = APIRouter(prefix="/api/advisor", tags=["AI 智能导购"])
@@ -20,6 +23,17 @@ class ChatIn(BaseModel):
     images: list = []  # [dataURI] 图片以多模态传给模型
     files: list = []  # [{name, url}] 文件信息
     ai_config: dict | None = None  # 用户自定义模型配置 {api_base, api_key, model}，为空走默认
+
+
+class CheckIn(BaseModel):
+    text: str = Field(default="", max_length=4000)
+
+
+@router.post("/check")
+def check_text(body: CheckIn, db: Session = Depends(get_db), _=Depends(get_current_user)):
+    """发送前预检：命中敏感词由前端拦截（不进入对话，弹窗提示）"""
+    hits = find_sensitive(body.text, db)
+    return {"ok": True, "blocked": bool(hits), "hits": hits}
 
 
 @router.post("/chat")
@@ -42,11 +56,43 @@ def chat(body: ChatIn, db: Session = Depends(get_db), _=Depends(get_current_user
     return {"ok": True, **result}
 
 
+@router.post("/chat/stream")
+def chat_stream(body: ChatIn, db: Session = Depends(get_db), _=Depends(get_current_user)):
+    """AI 导购聊天（流式 SSE）：增量输出，输出命中敏感词立即中断并替换为违规提示
+
+    事件：data: {"type":"delta","text"} / {"type":"blocked","reply"} /
+    {"type":"done","fallback"} / {"type":"error","message"}
+    输入敏感词、配置不完整在开流前以 JSON 返回（{"ok":false,"error"}）。
+    """
+    hits = find_sensitive(body.message, db)
+    if hits:
+        return {"ok": False, "error": f"消息包含敏感词：{'、'.join(hits)}，请修改后重新发送"}
+    ai_config = body.ai_config
+    if ai_config is not None:
+        missing = [k for k in ("api_base", "api_key", "model") if not (ai_config.get(k) or "").strip()]
+        if missing:
+            return {"ok": False, "error": "自定义模型配置不完整，请在模型设置中补全或切回默认模型"}
+
+    def sse():
+        for ev in chat_reply_stream(
+            db, body.message, body.history, body.product_id,
+            images=body.images, files=body.files, ai_config=ai_config,
+        ):
+            if ev.get("type") == "blocked":
+                ev = {"type": "blocked", "reply": BLOCKED_REPLY}
+            yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        sse(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @router.post("/upload")
 def upload_file(
     file: UploadFile = File(...),
     _=Depends(get_current_user),
-    request: Request = None,
 ):
     """上传文件（发送文件用），保存到 storage/uploads/ 并返回访问地址"""
     import os
@@ -60,5 +106,5 @@ def upload_file(
     os.makedirs(updir, exist_ok=True)
     with open(os.path.join(updir, fname), "wb") as f:
         f.write(file.file.read())
-    host = request.base_url if request else "http://127.0.0.1:8000/"
-    return {"ok": True, "name": file.filename, "url": f"{str(host).rstrip('/')}/uploads/{fname}"}
+    # 返回相对路径，跟随页面同源（局域网/内网穿透经前端代理均可访问）
+    return {"ok": True, "name": file.filename, "url": f"/uploads/{fname}"}
