@@ -160,6 +160,26 @@ class SystemConfig(Base):
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
 
+class MailMessage(Base):
+    """模拟邮箱（沙箱邮件）：不真实外发 SMTP，仅落库模拟投递（REQ 模拟邮箱）"""
+    __tablename__ = "mail_messages"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    to_email = Column(String(191), nullable=False, index=True)
+    category = Column(String(32), default="system", index=True)  # verify_code/price_alert/subscribe/system
+    purpose = Column(String(32), default="")  # 验证码用途：register/email_change/password_change
+    subject = Column(String(255), default="")
+    body = Column(Text)
+    code = Column(String(16), default="")  # 验证码（category=verify_code 时有值）
+    code_used = Column(Boolean, default=False)
+    is_read = Column(Boolean, default=False)
+    status = Column(String(16), default="sent")  # 模拟投递恒为 sent
+    created_at = Column(DateTime, default=datetime.now, index=True)
+
+    user = relationship("User")
+
+
 class SensitiveWord(Base):
     """敏感词库（AI 导购内容过滤）"""
     __tablename__ = "sensitive_words"

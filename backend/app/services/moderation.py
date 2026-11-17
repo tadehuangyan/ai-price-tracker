@@ -46,3 +46,8 @@ def find_sensitive(text: str, db: Session) -> list:
         if w and w.lower() in lowered and w not in hits:
             hits.append(w)
     return hits
+
+
+def max_word_len(db: Session) -> int:
+    """最长敏感词长度（流式输出的回看窗口：尾部保留该长度再放行）"""
+    return max((len(w.strip()) for w in get_words(db)), default=0)

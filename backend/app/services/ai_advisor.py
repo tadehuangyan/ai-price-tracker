@@ -2,8 +2,10 @@
 """AI 智能导购（REQ 智能导购对话）
 
 解析商品标记/链接/图片/文件并组装价格数据上下文，
-调用 OpenAI 兼容大模型生成对话回复。
+调用 OpenAI 兼容大模型生成对话回复（支持一次性与流式）。
 """
+import codecs
+import json
 from datetime import datetime, timedelta
 
 import httpx
@@ -12,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from ..config import LLM_API_BASE, LLM_API_KEY, LLM_MODEL
 from ..models import Listing, PriceSnapshot, Product
+from . import moderation
 
 
 def build_context(db: Session, product_id: int, preference: str = "") -> dict:
@@ -105,6 +108,50 @@ def llm_chat(messages: list, temperature: float = 0.5, timeout: int = 60, json_m
     return resp.json()["choices"][0]["message"]["content"]
 
 
+def llm_chat_stream(messages: list, temperature: float = 0.6, timeout: int = 90, ai_config: dict = None):
+    """流式调用 OpenAI 兼容大模型接口，逐段 yield 文本增量"""
+    base = (ai_config or {}).get("api_base") or LLM_API_BASE
+    key = (ai_config or {}).get("api_key") or LLM_API_KEY
+    model = (ai_config or {}).get("model") or LLM_MODEL
+    if not key or not base:
+        raise RuntimeError("LLM_API_KEY 未配置")
+    payload = {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+        "stream": True,
+    }
+    decoder = codecs.getincrementaldecoder("utf-8")()
+    buf = ""
+    with httpx.stream(
+        "POST",
+        f"{base.rstrip('/')}/chat/completions",
+        json=payload,
+        headers={"Authorization": f"Bearer {key}"},
+        timeout=timeout,
+    ) as resp:
+        resp.raise_for_status()
+        for raw in resp.iter_bytes():
+            buf += decoder.decode(raw)
+            while "\n" in buf:
+                line, buf = buf.split("\n", 1)
+                line = line.strip()
+                if not line.startswith("data:"):
+                    continue
+                data = line[5:].strip()
+                if data == "[DONE]":
+                    return
+                try:
+                    chunk = json.loads(data)
+                except ValueError:
+                    continue
+                choices = chunk.get("choices") or []
+                delta = (choices[0].get("delta") if choices else {}) or {}
+                text = delta.get("content")
+                if text:
+                    yield text
+
+
 # ================= 聊天模式（REQ 智能导购对话） =================
 
 CHAT_SYSTEM_PROMPT = (
@@ -160,22 +207,17 @@ def _link_brief(url: str) -> str:
     return "\n".join(lines)
 
 
-def chat_reply(
+def build_messages(
     db: Session,
     message: str,
     history: list,
     product_id: int = None,
     images: list = None,
     files: list = None,
-    ai_config: dict = None,
-) -> dict:
-    """AI 导购聊天：解析商品标记/链接/图片/文件 -> 组装上下文 -> 大模型回复
+) -> tuple:
+    """解析商品标记/链接/图片/文件并组装大模型消息
 
-    history: [{role: user|assistant, content}]
-    images: [dataURI 或 URL]，以多模态方式传给模型
-    files: [{name, url}]，以文本形式告知模型
-    ai_config: 用户自定义模型配置 {api_base, api_key, model}，为空走服务端默认模型
-    返回 {reply, contexts: [描述], fallback}
+    返回 (messages, contexts, current)：current 为当前消息展示文本（含链接补注）
     """
     contexts = []
     display = message
@@ -228,6 +270,36 @@ def chat_reply(
         messages.append({"role": "user", "content": content})
     else:
         messages.append({"role": "user", "content": current})
+    return messages, contexts, current
+
+
+def _fallback_summary(contexts: list, ai_config: dict, err: Exception) -> str:
+    """全部模型调用失败后的兜底文案"""
+    if contexts:
+        return "AI 服务暂时不可用，以下是已获取的数据：\n\n" + "\n\n".join(contexts)
+    label = "自定义模型调用失败" if ai_config else "AI 服务暂时不可用"
+    hint = "，可在模型设置中修改配置或切回默认模型" if ai_config else "，请稍后重试"
+    return f"{label}（{err}）{hint}。"
+
+
+def chat_reply(
+    db: Session,
+    message: str,
+    history: list,
+    product_id: int = None,
+    images: list = None,
+    files: list = None,
+    ai_config: dict = None,
+) -> dict:
+    """AI 导购聊天（一次性）：解析商品标记/链接/图片/文件 -> 组装上下文 -> 大模型回复
+
+    history: [{role: user|assistant, content}]
+    images: [dataURI 或 URL]，以多模态方式传给模型
+    files: [{name, url}]，以文本形式告知模型
+    ai_config: 用户自定义模型配置 {api_base, api_key, model}，为空走服务端默认模型
+    返回 {reply, contexts: [描述], fallback}
+    """
+    messages, contexts, current = build_messages(db, message, history, product_id, images, files)
 
     try:
         reply = llm_chat(messages, temperature=0.6, timeout=90, ai_config=ai_config)
@@ -244,10 +316,70 @@ def chat_reply(
                         "contexts": contexts, "fallback": False}
             except Exception:
                 pass
-        if contexts:
-            reply = "AI 服务暂时不可用，以下是已获取的数据：\n\n" + "\n\n".join(contexts)
-        else:
-            label = "自定义模型调用失败" if ai_config else "AI 服务暂时不可用"
-            hint = "，可在模型设置中修改配置或切回默认模型" if ai_config else "，请稍后重试"
-            reply = f"{label}（{e}）{hint}。"
-        return {"reply": reply, "contexts": contexts, "fallback": True}
+        return {"reply": _fallback_summary(contexts, ai_config, e), "contexts": contexts, "fallback": True}
+
+
+def chat_reply_stream(
+    db: Session,
+    message: str,
+    history: list,
+    product_id: int = None,
+    images: list = None,
+    files: list = None,
+    ai_config: dict = None,
+):
+    """流式 AI 导购聊天：边生成边 yield 事件 dict
+
+    事件：{"type": "delta", "text"} 增量文本 / {"type": "blocked"} 输出命中敏感词
+    / {"type": "done", "fallback"} 正常结束 / {"type": "error", "message"} 中断
+    输出增量经敏感词回看窗口检测：命中立即中断（由路由替换为违规提示）。
+    """
+    messages, contexts, current = build_messages(db, message, history, product_id, images, files)
+
+    hold = max(2, moderation.max_word_len(db))  # 尾部回看窗口，避免跨块敏感词漏检
+    attempts = [messages]
+    if images:
+        attempts.append([m if m.get("role") != "user" or isinstance(m.get("content"), str)
+                         else {"role": "user", "content": current}
+                         for m in messages])
+
+    for attempt, msgs in enumerate(attempts):
+        sent_len = 0  # 已放行字符数
+        buffer = ""
+        emitted = False
+        try:
+            for text in llm_chat_stream(msgs, temperature=0.6, timeout=90, ai_config=ai_config):
+                buffer += text
+                if moderation.find_sensitive(buffer, db):
+                    yield {"type": "blocked"}
+                    return
+                safe_end = len(buffer) - hold
+                if safe_end > sent_len:
+                    yield {"type": "delta", "text": buffer[sent_len:safe_end]}
+                    sent_len = safe_end
+                    emitted = True
+        except Exception as e:
+            if not emitted:
+                if attempt + 1 < len(attempts):
+                    continue  # 未输出任何内容 -> 降级为纯文本重试
+                yield {"type": "delta", "text": _fallback_summary(contexts, ai_config, e)}
+                yield {"type": "done", "fallback": True}
+                return
+            # 已有部分输出：补发尾段并提示中断
+            if moderation.find_sensitive(buffer, db):
+                yield {"type": "blocked"}
+                return
+            if len(buffer) > sent_len:
+                yield {"type": "delta", "text": buffer[sent_len:]}
+            yield {"type": "error", "message": str(e)}
+            return
+        # 流正常结束：尾段最终检查后放行
+        if moderation.find_sensitive(buffer, db):
+            yield {"type": "blocked"}
+            return
+        if len(buffer) > sent_len:
+            yield {"type": "delta", "text": buffer[sent_len:]}
+        if images and attempt > 0:
+            yield {"type": "delta", "text": "\n\n（注：图片未能被模型解析，已按文字内容回答）"}
+        yield {"type": "done", "fallback": False}
+        return

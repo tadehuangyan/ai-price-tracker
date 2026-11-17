@@ -2,7 +2,8 @@ import axios from 'axios'
 import router from './router'
 
 const api = axios.create({
-  baseURL: 'http://localhost:8000',
+  // 相对路径 + Vite 代理转发到后端，页面与接口同源，局域网/内网穿透均可访问
+  baseURL: '/',
   timeout: 30000,
 })
 
