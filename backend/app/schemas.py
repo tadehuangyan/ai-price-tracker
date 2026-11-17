@@ -165,3 +165,9 @@ class KnowledgeIn(BaseModel):
     tags: Optional[str] = ""  # 逗号分隔关键词
     content: str = Field(min_length=1, max_length=20000)
     enabled: bool = True
+
+
+# ---------- 用户画像（个人中心查看/编辑） ----------
+
+class ProfileMemoIn(BaseModel):
+    content: str = Field(default="", max_length=20000)

@@ -6,8 +6,9 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from ..deps import get_current_user
 from ..models import Product, Tracking, User
-from ..schemas import LoginIn, ProfileUpdate, RegisterIn, UserOut
+from ..schemas import LoginIn, ProfileMemoIn, ProfileUpdate, RegisterIn, UserOut
 from ..security import create_token, hash_password, verify_password
+from ..services import user_profile
 from ..services.mailer import check_verification_code, send_mail
 
 router = APIRouter(prefix="/api/auth", tags=["用户管理"])
@@ -130,3 +131,16 @@ def my_trackings(user: User = Depends(get_current_user), db: Session = Depends(g
         }
         for t, p in rows
     ]
+
+
+@router.get("/profile-memo")
+def get_profile_memo(user: User = Depends(get_current_user)):
+    """用户画像（AI 自动整理的消费偏好 MD，可在个人中心查看/编辑）"""
+    return {"ok": True, "content": user_profile.read_profile(user.id)}
+
+
+@router.put("/profile-memo")
+def update_profile_memo(body: ProfileMemoIn, user: User = Depends(get_current_user)):
+    """整文更新用户画像（个人中心手动编辑）"""
+    user_profile.write_profile(user.id, body.content)
+    return {"ok": True}

@@ -24,6 +24,8 @@ KEYWORDS = [
     ("显示器", "电脑外设", 3),
     ("充电宝", "数码配件", 3),
     ("吹风机", "家用电器", 3),
+    ("内存条", "电脑配件", 4),
+    ("DDR5 台式机内存", "电脑配件", 3),
 ]
 
 UA = (
@@ -77,6 +79,16 @@ def main():
     from app.models import Listing, PriceSnapshot, Product, SystemLog
     from app.services.crawler.manmanbuy import STORAGE_PATH, query_history_with
 
+    # 关键词过滤：python scripts/seed_data.py 内存  -> 只跑含"内存"的关键词
+    keywords = KEYWORDS
+    if len(sys.argv) > 1:
+        kw_filter = sys.argv[1]
+        keywords = [k for k in KEYWORDS if kw_filter in k[0]]
+        if not keywords:
+            print(f"没有匹配的关键词: {kw_filter}")
+            sys.exit(1)
+        print(f"按关键词过滤: {[k[0] for k in keywords]}")
+
     if not os.path.exists(STORAGE_PATH):
         print("缺少慢慢买登录态，请先运行 login_manmanbuy.py")
         sys.exit(1)
@@ -98,7 +110,7 @@ def main():
         # 1) 收集候选商品
         candidates = []
         seen_urls = set()
-        for keyword, category, limit in KEYWORDS:
+        for keyword, category, limit in keywords:
             try:
                 items = collect_search_links(page, keyword, limit)
                 for it in items:

@@ -79,6 +79,30 @@
         </div>
       </el-tab-pane>
 
+      <el-tab-pane label="用户画像" name="memo">
+        <div class="card spec-card file-card reveal" data-delay="120">
+          <div class="kicker"><span class="pin-dot"></span>PROFILE MEMO · 用户画像</div>
+          <h3 class="card-title">用户画像</h3>
+          <div class="muted memo-desc">
+            由 AI 智能导购根据对话自动整理（消费偏好 / 预算区间 / 关注商品 / 购买习惯），也可在此手动修改；
+            后续对话中的个性化消费建议会参考这里的内容。
+          </div>
+          <el-input
+            v-model="memoContent"
+            type="textarea"
+            :rows="14"
+            placeholder="暂无画像记录。可直接书写，例如：&#10;## 消费偏好&#10;- 偏好性价比高的手机&#10;## 预算区间&#10;- 手机预算约 3000 元"
+          />
+          <div class="memo-foot">
+            <span class="muted">{{ memoContent.length }} / 20000</span>
+            <span class="memo-btns">
+              <el-button @click="loadMemo">重新加载</el-button>
+              <el-button type="primary" :loading="memoLoading" @click="saveMemo">保存画像</el-button>
+            </span>
+          </div>
+        </div>
+      </el-tab-pane>
+
       <el-tab-pane name="inbox">
         <template #label>
           我的邮箱
@@ -264,7 +288,39 @@ async function readAll() {
   inbox.unread = 0
 }
 
-onMounted(() => loadInbox())
+// ---------- 用户画像（AI 自动整理，可手动修改） ----------
+const memoContent = ref('')
+const memoLoading = ref(false)
+
+async function loadMemo() {
+  try {
+    const { data } = await api.get('/api/auth/profile-memo')
+    memoContent.value = data.content || ''
+  } catch (e) {
+    ElMessage.error(errMsg(e))
+  }
+}
+
+async function saveMemo() {
+  if (memoContent.value.length > 20000) {
+    ElMessage.warning('画像内容过长（上限 20000 字）')
+    return
+  }
+  memoLoading.value = true
+  try {
+    await api.put('/api/auth/profile-memo', { content: memoContent.value })
+    ElMessage.success('画像已保存，AI 后续建议会参考最新内容')
+  } catch (e) {
+    ElMessage.error(errMsg(e))
+  } finally {
+    memoLoading.value = false
+  }
+}
+
+onMounted(() => {
+  loadInbox()
+  loadMemo()
+})
 
 // ================= 标本手记 · 动效（纯表现层，不改动上方业务逻辑） =================
 const pageEl = ref<HTMLElement>()
@@ -319,8 +375,18 @@ onMounted(() => {
 .stat-l { margin-top: 5px; }
 
 /* —— 资料卡 —— */
-.file-card { max-width: 640px; padding: 22px 26px 18px; }
+.file-card { max-width: 900px; padding: 22px 26px 18px; }
 .file-card:hover { transform: none; box-shadow: var(--shadow-md); }
+
+/* —— 用户画像 —— */
+.memo-desc { margin: 2px 0 10px; line-height: 1.7; }
+.file-card :deep(.el-textarea__inner) {
+  font-family: var(--kai); letter-spacing: 0.03em; line-height: 1.8;
+}
+.memo-foot {
+  display: flex; justify-content: space-between; align-items: center; margin-top: 10px;
+}
+.memo-btns { display: flex; gap: 8px; }
 /* —— 透明装饰素材（标本点缀，纯表现层） —— */
 .deco { position: absolute; pointer-events: none; user-select: none; z-index: 2; }
 .deco-quill {

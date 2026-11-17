@@ -63,6 +63,15 @@
         <div class="kicker"><span class="pin-dot"></span>SPECIMEN SITES · 采集点</div>
         <div class="block-title">同一件标本，{{ product.listings.length }} 个采集点</div>
         <div class="site-list">
+          <!-- 采集点骨架（实时抓取中） -->
+          <template v-if="isLive && liveLoading && !product.listings.length">
+            <div v-for="i in 3" :key="'sk' + i" class="sk-row">
+              <span class="sk-chip"></span>
+              <span class="sk-line sk-title"></span>
+              <span class="sk-bar"></span>
+              <span class="sk-line sk-price"></span>
+            </div>
+          </template>
           <div class="site-row" v-for="row in product.listings" :key="row.id">
             <span class="site-plat"><el-tag size="small">{{ platformName(row.platform) }}</el-tag></span>
             <span class="site-title" :title="row.title">{{ row.title }}</span>
@@ -72,7 +81,7 @@
             <span class="muted site-time">{{ row.last_crawled_at || '未采集' }}</span>
             <el-link v-if="row.url" :href="row.url" target="_blank" type="primary">前往购买</el-link>
           </div>
-          <el-empty v-if="!product.listings.length" description="暂无采集点" :image-size="60" />
+          <el-empty v-if="!liveLoading && !product.listings.length" description="暂无采集点" :image-size="60" />
         </div>
       </div>
 
@@ -101,7 +110,13 @@
           <div class="stat"><div class="label">平均价</div><div class="value">￥{{ trend.avg_price ?? '--' }}</div></div>
           <div class="stat"><div class="label">数据点</div><div class="value">{{ trend.points.length }} 天</div></div>
         </div>
-        <PriceTrendChart :points="trend?.points || []" :title="`历史价格走势（近 ${days} 天）`" style="margin-top: 8px" />
+        <!-- 图谱骨架（实时抓取中）：手绘曲线呼吸动画 -->
+        <div v-if="isLive && liveLoading && !trend" class="sk-chart">
+          <svg class="sk-curve" viewBox="0 0 600 160" preserveAspectRatio="none" aria-hidden="true">
+            <polyline points="0,125 60,105 120,115 180,85 240,100 300,62 360,78 420,52 480,68 540,42 600,58" />
+          </svg>
+        </div>
+        <PriceTrendChart v-else :points="trend?.points || []" :title="`历史价格走势（近 ${days} 天）`" style="margin-top: 8px" />
         <img class="deco deco-fern-chart" src="/deco/snail-shell.png" alt="" aria-hidden="true" />
       </div>
     </template>
@@ -495,5 +510,51 @@ onUnmounted(() => {
   .cover-mat { width: 200px; height: 200px; }
   .site-bar { width: 110px; }
   .site-time { width: 120px; }
+}
+
+/* —— 实时抓取中的骨架占位（遮盖空白期） —— */
+.sk-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 2px; border-bottom: 1px dashed var(--line);
+}
+.sk-chip {
+  width: 52px; height: 22px; border-radius: 2px; flex-shrink: 0;
+  background: var(--paper-3); animation: sk-pulse 1.1s ease-in-out infinite;
+}
+.sk-line {
+  height: 12px; border-radius: 2px;
+  background: var(--paper-3); animation: sk-pulse 1.1s ease-in-out infinite;
+}
+.sk-title { flex: 1; }
+.sk-price { width: 64px; flex-shrink: 0; }
+.sk-bar {
+  width: 120px; height: 8px; border-radius: 2px; flex-shrink: 0;
+  background: var(--paper-3); animation: sk-pulse 1.1s ease-in-out infinite;
+}
+.sk-row:nth-child(2) :is(.sk-chip, .sk-line, .sk-bar) { animation-delay: .3s; }
+.sk-row:nth-child(3) :is(.sk-chip, .sk-line, .sk-bar) { animation-delay: .6s; }
+@keyframes sk-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .45; }
+}
+.sk-chart {
+  height: 260px; margin-top: 8px; border: 1px solid var(--line); border-radius: 2px;
+  background: var(--paper-3);
+  background-image: repeating-linear-gradient(
+    to bottom, transparent 0 31px, rgba(185, 170, 142, 0.16) 31px 32px
+  );
+  overflow: hidden;
+}
+.sk-curve { width: 100%; height: 100%; display: block; }
+.sk-curve polyline {
+  fill: none; stroke: var(--green); stroke-width: 2.5;
+  stroke-linecap: round; stroke-linejoin: round; opacity: 0.55;
+  stroke-dasharray: 1400; stroke-dashoffset: 1400;
+  animation: sk-draw 2.6s ease-in-out infinite;
+}
+@keyframes sk-draw {
+  0% { stroke-dashoffset: 1400; }
+  50% { stroke-dashoffset: 0; }
+  100% { stroke-dashoffset: -1400; }
 }
 </style>
