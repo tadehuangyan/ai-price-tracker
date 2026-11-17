@@ -309,7 +309,9 @@ def test_chat_reply_product_tag_invalid(db, monkeypatch):
     monkeypatch.setattr(ai_advisor, "llm_chat", _fake_llm_capture(calls))
     out = ai_advisor.chat_reply(db, "[[product:99999]]怎么样", [])
     assert out["contexts"] == []
-    assert calls[0][-1]["content"] == "[[product:99999]]怎么样"
+    # 用户消息经 <user_message> 标签隔离（提示注入防御），原文保留在标签内
+    assert "[[product:99999]]怎么样" in calls[0][-1]["content"]
+    assert "<user_message>" in calls[0][-1]["content"]
 
 
 def test_chat_reply_link_ok(db, monkeypatch):
@@ -406,7 +408,8 @@ def test_chat_reply_no_images_text_message(db, monkeypatch):
     calls = []
     monkeypatch.setattr(ai_advisor, "llm_chat", _fake_llm_capture(calls))
     ai_advisor.chat_reply(db, "纯文本问题", [])
-    assert calls[0][-1]["content"] == "纯文本问题"
+    # 用户消息经 <user_message> 标签隔离（提示注入防御）
+    assert calls[0][-1]["content"].strip() == "<user_message>\n纯文本问题\n</user_message>"
 
 
 # ================= 降级链 =================

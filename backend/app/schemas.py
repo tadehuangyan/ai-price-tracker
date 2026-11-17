@@ -155,3 +155,13 @@ class SensitiveWordIn(BaseModel):
 class SensitiveWordBatchIn(BaseModel):
     words: str = Field(min_length=1, max_length=10000)  # 每行一个词
     category: Optional[str] = "通用"
+
+
+# ---------- 知识库（RAG 检索增强） ----------
+
+class KnowledgeIn(BaseModel):
+    title: str = Field(min_length=1, max_length=255)
+    category: Optional[str] = ""
+    tags: Optional[str] = ""  # 逗号分隔关键词
+    content: str = Field(min_length=1, max_length=20000)
+    enabled: bool = True

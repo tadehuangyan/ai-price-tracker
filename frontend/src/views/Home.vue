@@ -61,7 +61,7 @@
       <div class="annot shelf-count">在架标本 {{ total }} 件 · 实时来自慢慢买</div>
     </div>
 
-    <div v-loading="loading" class="grid" ref="gridRef">
+    <div v-loading="loading" element-loading-text="标本采集中" class="grid" ref="gridRef">
       <div
         v-for="(p, i) in displayItems"
         :key="p.url"
@@ -285,7 +285,7 @@ onUnmounted(() => {
 }
 .shelf-count { font-size: 12px; }
 .grid {
-  display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  display: grid; grid-template-columns: repeat(6, 1fr);
   gap: 16px; min-height: 200px;
 }
 .item {

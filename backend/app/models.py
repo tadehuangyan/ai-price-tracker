@@ -189,3 +189,16 @@ class SensitiveWord(Base):
     category = Column(String(32), default="通用")
     enabled = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.now)
+
+
+class KnowledgeArticle(Base):
+    """知识库条目（RAG 检索增强）：比价攻略 / 大促规律 / 品类选购指南"""
+    __tablename__ = "knowledge_articles"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    title = Column(String(255), nullable=False)
+    category = Column(String(64), default="", index=True)
+    tags = Column(String(255), default="")  # 逗号分隔关键词（检索命中强信号）
+    content = Column(Text, nullable=False)
+    enabled = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.now)

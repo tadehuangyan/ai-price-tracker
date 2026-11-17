@@ -1,5 +1,7 @@
 from datetime import datetime
 
+import threading
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import func
@@ -94,22 +96,26 @@ def categories(db: Session = Depends(get_db)):
 _live_cache: dict = {}  # (keyword, category) -> (ts, items)
 LIVE_CACHE_TTL = 300  # 5 分钟
 
+# stale-while-revalidate：缓存过期时先回旧数据、后台静默刷新，用户无需等待爬虫
+_refreshing: set = set()
+_refresh_lock = threading.Lock()
 
-@router.get("/live-search")
-def live_search(
-    keyword: str = Query("", max_length=100),
-    category: str = Query("", max_length=20),
-    n: int = Query(24, ge=1, le=60),
-    refresh: int = Query(0),
-):
-    """实时从慢慢买获取商品列表：关键词走比价搜索，分类/默认走全网折扣分类页"""
-    import time
 
-    key = (keyword.strip(), category.strip())
-    cached = _live_cache.get(key)
-    if not refresh and cached and time.time() - cached[0] < LIVE_CACHE_TTL:
-        return {"keyword": keyword, "category": category, "items": cached[1][:n]}
+def _mark_refreshing(key) -> bool:
+    with _refresh_lock:
+        if key in _refreshing:
+            return False
+        _refreshing.add(key)
+        return True
 
+
+def _done_refreshing(key) -> None:
+    with _refresh_lock:
+        _refreshing.discard(key)
+
+
+def _fetch_live_items(keyword: str, category: str, n: int) -> list:
+    """实时抓取商品列表（同步爬取，缓存填充与后台刷新共用）"""
     if keyword.strip():
         from ..services.crawler.manmanbuy import discover_products
 
@@ -120,7 +126,39 @@ def live_search(
         from ..services.crawler.manmanbuy import browse_category
 
         items = browse_category(category.strip(), limit=n)
+    return items
 
+
+@router.get("/live-search")
+def live_search(
+    keyword: str = Query("", max_length=100),
+    category: str = Query("", max_length=20),
+    n: int = Query(24, ge=1, le=60),
+    refresh: int = Query(0),
+):
+    """实时从慢慢买获取商品列表：关键词走比价搜索，分类/默认走全网折扣分类页
+
+    缓存 5 分钟；过期后先返回上一批数据并后台刷新，避免用户等待爬虫。
+    """
+    import time
+
+    key = (keyword.strip(), category.strip())
+    cached = _live_cache.get(key)
+    if not refresh and cached:
+        if time.time() - cached[0] < LIVE_CACHE_TTL:
+            return {"keyword": keyword, "category": category, "items": cached[1][:n]}
+        if _mark_refreshing(key):
+            def _bg():
+                try:
+                    _live_cache[key] = (time.time(), _fetch_live_items(keyword, category, n))
+                except Exception:
+                    pass
+                finally:
+                    _done_refreshing(key)
+            threading.Thread(target=_bg, daemon=True).start()
+        return {"keyword": keyword, "category": category, "items": cached[1][:n]}
+
+    items = _fetch_live_items(keyword, category, n)
     _live_cache[key] = (time.time(), items)
     return {"keyword": keyword, "category": category, "items": items}
 
@@ -170,14 +208,45 @@ _discover_cache = {"at": 0.0, "items": []}
 DISCOVER_CACHE_TTL = 600  # 10 分钟
 
 
+def _fetch_discover_items(db: Session, n: int) -> list:
+    """实时发现一批库外商品（同步爬取）"""
+    import random
+
+    from ..services.crawler.manmanbuy import discover_products
+
+    keyword = random.choice(DISCOVER_KEYWORDS)
+    found = discover_products(keyword, limit=n + 12)
+    # 过滤已在库的商品
+    known = {u for (u,) in db.query(Listing.url).all()}
+    items = []
+    for f in found:
+        if f["url"] in known:
+            continue
+        items.append(
+            {
+                "title": f["title"],
+                "price": f["price"],
+                "platform": f["platform"],
+                "url": f["url"],
+                "image": f["image"],
+                "keyword": f["keyword"],
+            }
+        )
+        if len(items) >= 20:
+            break
+    return items
+
+
 @router.get("/discover")
 def discover(
     n: int = Query(8, ge=1, le=20),
     refresh: int = Query(0),
     db: Session = Depends(get_db),
 ):
-    """从慢慢买实时发现数据库之外的全网商品（带 10 分钟缓存，refresh=1 强制换一批）"""
-    import random
+    """从慢慢买实时发现数据库之外的全网商品（带 10 分钟缓存，refresh=1 强制换一批）
+
+    缓存过期后先返回上一批数据并后台刷新，避免用户等待爬虫。
+    """
     import time
 
     if (
@@ -186,29 +255,26 @@ def discover(
         and _discover_cache["items"]
     ):
         items = _discover_cache["items"][:n]
-    else:
-        from ..services.crawler.manmanbuy import discover_products
+    elif not refresh and _discover_cache["items"]:
+        # 过期但有旧数据：先回旧的，后台静默换新
+        if _mark_refreshing("discover"):
+            def _bg():
+                from ..database import SessionLocal
 
-        keyword = random.choice(DISCOVER_KEYWORDS)
-        found = discover_products(keyword, limit=n + 12)
-        # 过滤已在库的商品
-        known = {u for (u,) in db.query(Listing.url).all()}
-        items = []
-        for f in found:
-            if f["url"] in known:
-                continue
-            items.append(
-                {
-                    "title": f["title"],
-                    "price": f["price"],
-                    "platform": f["platform"],
-                    "url": f["url"],
-                    "image": f["image"],
-                    "keyword": f["keyword"],
-                }
-            )
-            if len(items) >= 20:
-                break
+                s = SessionLocal()
+                try:
+                    fresh = _fetch_discover_items(s, n)
+                    _discover_cache["at"] = time.time()
+                    _discover_cache["items"] = fresh
+                except Exception:
+                    pass
+                finally:
+                    s.close()
+                    _done_refreshing("discover")
+            threading.Thread(target=_bg, daemon=True).start()
+        items = _discover_cache["items"][:n]
+    else:
+        items = _fetch_discover_items(db, n)
         _discover_cache["at"] = time.time()
         _discover_cache["items"] = items
         items = items[:n]

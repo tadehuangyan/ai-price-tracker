@@ -462,6 +462,8 @@ onUnmounted(() => {
 .layout .layout-main {
   padding: 0 26px 30px;
   overflow-y: auto;
+  display: flex;
+  flex-direction: column;
 }
 .layout-rule {
   height: 3px;
@@ -476,6 +478,10 @@ onUnmounted(() => {
   border-radius: var(--radius);
   box-shadow: var(--shadow-sm);
   min-height: 60vh;
+  /* 纵向 flex 把确定高度传给页面根（聊天页等整屏布局依赖它，避免外层滚动） */
+  flex: 1;
+  display: flex;
+  flex-direction: column;
 }
 .layout-page-enter-active,
 .layout-page-leave-active {

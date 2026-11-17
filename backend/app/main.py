@@ -76,7 +76,36 @@ async def lifespan(app: FastAPI):
     finally:
         db.close()
     start_scheduler()
+    _warm_live_caches()
     yield
+
+
+def _warm_live_caches():
+    """启动后后台预热实时商品缓存，避免用户首次访问等待爬虫（约 5~8s）"""
+    import threading
+
+    def _bg():
+        from .routers.products import _fetch_discover_items, _fetch_live_items, _discover_cache, _live_cache
+
+        import time
+
+        try:
+            items = _fetch_live_items("", "", 24)
+            _live_cache[("", "")] = (time.time(), items)
+        except Exception as e:
+            logging.getLogger(__name__).warning("预热 live-search 缓存失败：%s", e)
+        try:
+            db = SessionLocal()
+            try:
+                fresh = _fetch_discover_items(db, 8)
+                _discover_cache["at"] = time.time()
+                _discover_cache["items"] = fresh
+            finally:
+                db.close()
+        except Exception as e:
+            logging.getLogger(__name__).warning("预热 discover 缓存失败：%s", e)
+
+    threading.Thread(target=_bg, daemon=True, name="warm-live-cache").start()
 
 
 app = FastAPI(title="商品历史价格追踪系统 (SPT)", version="1.0", lifespan=lifespan)
