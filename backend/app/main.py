@@ -2,8 +2,11 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.requests import Request
 
 from .database import Base, SessionLocal, engine
 from .models import DataSource, SensitiveWord, SystemConfig, SystemLog, User
@@ -105,3 +108,29 @@ app.mount("/uploads", StaticFiles(directory=_updir), name="uploads")
 @app.get("/api/health")
 def health():
     return {"ok": True, "service": "SPT"}
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """参数校验错误（422）的 detail 统一为字符串并做中文化
+
+    FastAPI 默认返回 detail 数组，前端提示组件把它当配置对象渲染会崩溃，
+    导致所有错误提示“无响应”。
+    """
+    parts = []
+    for err in exc.errors():
+        loc = ".".join(str(x) for x in err.get("loc", []) if x != "body") or "参数"
+        typ = err.get("type", "")
+        ctx = err.get("ctx") or {}
+        if typ == "missing":
+            msg = "缺少必填字段"
+        elif typ == "string_too_short":
+            msg = f"长度不足（至少 {ctx.get('min_length')} 个字符）" if ctx.get("min_length") else "输入内容太短"
+        elif typ == "string_too_long":
+            msg = f"长度超限（最多 {ctx.get('max_length')} 个字符）" if ctx.get("max_length") else "输入内容太长"
+        elif typ in ("string_pattern_mismatch", "value_error"):
+            msg = "格式不正确"
+        else:
+            msg = err.get("msg") or "参数不合法"
+        parts.append(f"{loc}: {msg}")
+    return JSONResponse(status_code=422, content={"detail": "；".join(parts)})
