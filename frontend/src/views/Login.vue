@@ -22,6 +22,7 @@
       <aside class="login-plate">
         <img class="deco deco-seal" src="/deco/wax-seal.png" alt="" aria-hidden="true" />
         <img class="deco deco-fern" src="/deco/fern-sprig.png" alt="" aria-hidden="true" />
+        <img class="deco deco-cone" src="/deco/pine-cone.png" alt="" aria-hidden="true" />
         <span class="tape plate-tape-l"></span>
         <span class="tape plate-tape-r"></span>
         <span class="pin plate-pin" ref="pinRef"></span>
@@ -486,6 +487,13 @@ onUnmounted(() => {
   bottom: -16px;
   width: 122px;
   transform: rotate(11deg);
+  opacity: 0.8;
+}
+.deco-cone {
+  left: -18px;
+  bottom: -14px;
+  width: 85px;
+  transform: rotate(8deg);
   opacity: 0.8;
 }
 .deco-washi {

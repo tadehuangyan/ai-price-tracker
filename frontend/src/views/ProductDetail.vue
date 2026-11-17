@@ -102,7 +102,7 @@
           <div class="stat"><div class="label">数据点</div><div class="value">{{ trend.points.length }} 天</div></div>
         </div>
         <PriceTrendChart :points="trend?.points || []" :title="`历史价格走势（近 ${days} 天）`" style="margin-top: 8px" />
-        <img class="deco deco-fern-chart" src="/deco/fern-sprig.png" alt="" aria-hidden="true" />
+        <img class="deco deco-fern-chart" src="/deco/snail-shell.png" alt="" aria-hidden="true" />
       </div>
     </template>
 
@@ -474,7 +474,7 @@ onUnmounted(() => {
 
 /* —— 透明装饰素材 —— */
 .deco { position: absolute; pointer-events: none; z-index: 3; }
-.deco-wax-seal { width: 80px; top: -30px; right: 20px; transform: rotate(-10deg); }
+.deco-wax-seal { width: 80px; top: -16px; left: 8px; transform: rotate(-8deg); }
 .price-tag {
   position: absolute;
   top: -6px; right: 10px; width: 110px;
@@ -488,7 +488,7 @@ onUnmounted(() => {
   font-family: var(--mono); font-size: 10px; letter-spacing: 0.02em;
   color: var(--ink); white-space: nowrap;
 }
-.deco-fern-chart { width: 100px; right: 8px; bottom: -22px; opacity: 0.7; transform: rotate(-8deg); }
+.deco-fern-chart { width: 95px; right: 8px; bottom: -22px; opacity: 0.75; transform: rotate(-6deg); }
 
 @media (max-width: 1280px) {
   .head { flex-wrap: wrap; }

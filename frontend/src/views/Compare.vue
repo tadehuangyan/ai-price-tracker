@@ -1,7 +1,7 @@
 <template>
   <div class="page compare" ref="rootEl">
     <header class="page-head">
-      <img src="/deco/flower-sprig.png" alt="" aria-hidden="true" class="deco deco-flower" />
+      <img src="/deco/pine-cone.png" alt="" aria-hidden="true" class="deco deco-flower" />
       <div class="kicker"><span class="pin-dot"></span>PLATFORM SPREAD · 比价台</div>
       <h1 class="page-title" ref="titleEl">价格对比 · 比价台</h1>
       <p class="page-sub">同物异价，列而观之；平台散布如星，取其低者而录之。</p>
@@ -331,8 +331,8 @@ onUnmounted(() => {
 /* —— 透明装饰素材（标本点缀，纯表现层） —— */
 .deco { position: absolute; pointer-events: none; user-select: none; z-index: 2; }
 .deco-flower {
-  width: 95px; right: 6px; top: -8px;
-  transform: rotate(7deg); opacity: 0.75;
+  width: 90px; right: 6px; top: -8px;
+  transform: rotate(-7deg); opacity: 0.75;
 }
 .deco-tag {
   width: 90px; right: 30px; top: -18px;

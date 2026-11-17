@@ -4,7 +4,7 @@
       <div class="kicker"><span class="pin-dot"></span>COLLECTION LOG · 采集台账</div>
       <h1 class="page-title" ref="titleEl">价格追踪 · 采集台账</h1>
       <p class="page-sub">凡所留意之物，皆录于册：记其编号、时日与所值几许，待价落之时，钤印为凭。</p>
-      <img class="deco deco-flower-head" src="/deco/flower-sprig.png" alt="" aria-hidden="true" />
+      <img class="deco deco-flower-head" src="/deco/feather.png" alt="" aria-hidden="true" />
     </header>
 
     <!-- —— 追踪台账 —— -->
@@ -24,7 +24,7 @@
       <!-- 空态：台账空白页 -->
       <div v-if="!loading && !list.length" class="empty-sheet">
         <span class="pin empty-pin" ref="emptyPinEl"></span>
-        <img class="deco deco-beetle-empty" src="/deco/beetle.png" alt="" aria-hidden="true" />
+        <img class="deco deco-beetle-empty" src="/deco/mushroom.png" alt="" aria-hidden="true" />
         <div class="empty-frame">
           <p class="annot empty-note">暂无采集记录</p>
           <p class="muted">还没有追踪任何商品，去商品页添加吧</p>
@@ -445,8 +445,8 @@ onUnmounted(() => {
 
 /* —— 透明装饰素材 —— */
 .deco { position: absolute; pointer-events: none; z-index: 3; }
-.deco-flower-head { width: 100px; top: -16px; right: 6px; opacity: 0.75; transform: rotate(10deg); }
-.deco-beetle-empty { width: 90px; top: 14px; left: 50%; margin-left: -230px; opacity: 0.85; transform: rotate(-8deg); }
+.deco-flower-head { width: 100px; top: -16px; right: 6px; opacity: 0.75; transform: rotate(8deg); }
+.deco-beetle-empty { width: 90px; top: 14px; left: 50%; margin-left: -230px; opacity: 0.8; transform: rotate(-8deg); }
 
 @media (max-width: 1320px) {
   .entry { grid-template-columns: 56px minmax(0, 1fr) 210px 118px 172px; gap: 12px; }

@@ -5,7 +5,7 @@
       <div class="kicker"><span class="pin-dot"></span>PLATE Ⅰ · SPECIMEN CABINET</div>
       <h1 class="page-title" ref="titleRef">标本展位</h1>
       <p class="page-sub">陈列全网商品标本，注记每一次价格呼吸。</p>
-      <img class="deco deco-fern-head" src="/deco/fern-sprig.png" alt="" aria-hidden="true" />
+      <img class="deco deco-magnifier-head" src="/deco/magnifier.png" alt="" aria-hidden="true" />
     </div>
 
     <!-- 采集台 -->
@@ -93,7 +93,7 @@
         :current-page="page"
         @current-change="(p: number) => search(p)"
       />
-      <img class="deco deco-beetle-shelf" src="/deco/beetle.png" alt="" aria-hidden="true" />
+      <img class="deco deco-maple-shelf" src="/deco/maple-leaf.png" alt="" aria-hidden="true" />
     </div>
 
     <div class="colophon page-foot">PRICE TRACE · 标本手记 —— 每一件商品，都是一枚被记录的价格标本。</div>
@@ -341,8 +341,8 @@ onUnmounted(() => {
 /* —— 透明装饰素材 —— */
 .deco { position: absolute; pointer-events: none; z-index: 3; }
 .deco-tape-desk { width: 150px; top: -32px; left: 22px; transform: rotate(-4deg); }
-.deco-fern-head { width: 110px; top: -6px; right: 2px; opacity: 0.75; transform: rotate(10deg); }
-.deco-beetle-shelf { width: 80px; top: -12px; right: 4px; opacity: 0.7; transform: rotate(-8deg); }
+.deco-magnifier-head { width: 95px; top: -6px; right: 2px; opacity: 0.8; transform: rotate(-8deg); }
+.deco-maple-shelf { width: 95px; top: -12px; right: 4px; opacity: 0.8; transform: rotate(10deg); }
 
 @media (max-width: 1280px) {
   .grid { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }
