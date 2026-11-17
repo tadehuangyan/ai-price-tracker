@@ -1,0 +1,171 @@
+from datetime import datetime
+
+from sqlalchemy import (
+    Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, Index
+)
+from sqlalchemy.orm import relationship
+
+from .database import Base
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    username = Column(String(64), unique=True, nullable=False, index=True)
+    email = Column(String(191), unique=True, nullable=False, index=True)
+    nickname = Column(String(64), default="")
+    password_hash = Column(String(128), nullable=False)
+    role = Column(String(16), default="user")  # user / admin
+    status = Column(String(16), default="active")  # active / disabled
+    created_at = Column(DateTime, default=datetime.now)
+
+    trackings = relationship("Tracking", back_populates="user", cascade="all, delete-orphan")
+    alerts = relationship("Alert", back_populates="user", cascade="all, delete-orphan")
+
+
+class Product(Base):
+    __tablename__ = "products"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(255), nullable=False, index=True)
+    category = Column(String(64), default="", index=True)
+    brand = Column(String(64), default="")
+    image_url = Column(String(500), default="")
+    description = Column(Text)
+    created_at = Column(DateTime, default=datetime.now)
+
+    listings = relationship("Listing", back_populates="product", cascade="all, delete-orphan")
+
+
+class Listing(Base):
+    """同一商品在某平台的在售链接（报价）"""
+    __tablename__ = "listings"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    product_id = Column(Integer, ForeignKey("products.id"), nullable=False, index=True)
+    platform = Column(String(32), nullable=False, index=True)  # jd / taobao / manmanbuy ...
+    platform_item_id = Column(String(191), default="")
+    url = Column(String(500), default="")
+    title = Column(String(255), default="")
+    current_price = Column(Float, default=0.0)
+    in_stock = Column(Boolean, default=True)
+    last_crawled_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.now)
+
+    product = relationship("Product", back_populates="listings")
+    snapshots = relationship("PriceSnapshot", back_populates="listing", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        UniqueConstraint("product_id", "platform", "platform_item_id", name="uq_listing"),
+    )
+
+
+class PriceSnapshot(Base):
+    __tablename__ = "price_snapshots"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    listing_id = Column(Integer, ForeignKey("listings.id"), nullable=False, index=True)
+    price = Column(Float, nullable=False)
+    captured_at = Column(DateTime, default=datetime.now, index=True)
+
+    listing = relationship("Listing", back_populates="snapshots")
+
+    __table_args__ = (
+        Index("ix_snap_listing_time", "listing_id", "captured_at"),
+    )
+
+
+class Tracking(Base):
+    __tablename__ = "trackings"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    product_id = Column(Integer, ForeignKey("products.id"), nullable=False, index=True)
+    target_price = Column(Float, nullable=True)  # 目标价
+    created_at = Column(DateTime, default=datetime.now)
+
+    user = relationship("User", back_populates="trackings")
+    product = relationship("Product")
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "product_id", name="uq_user_product"),
+    )
+
+
+class Alert(Base):
+    """站内消息 / 降价提醒"""
+    __tablename__ = "alerts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    product_id = Column(Integer, ForeignKey("products.id"), nullable=True)
+    price = Column(Float, nullable=True)
+    target_price = Column(Float, nullable=True)
+    message = Column(String(500), default="")
+    is_read = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.now)
+
+    user = relationship("User", back_populates="alerts")
+    product = relationship("Product")
+
+
+class DataSource(Base):
+    """数据源配置（REQ-SPT-601）"""
+    __tablename__ = "data_sources"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    platform = Column(String(32), unique=True, nullable=False)
+    name = Column(String(64), default="")
+    enabled = Column(Boolean, default=True)
+    crawl_interval_minutes = Column(Integer, default=1440)
+    config = Column(Text)  # JSON 字符串：选择器、入口地址等
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class CrawlTask(Base):
+    """采集任务状态（REQ-SPT-602）"""
+    __tablename__ = "crawl_tasks"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    platform = Column(String(32), default="", index=True)
+    target = Column(String(500), default="")  # 商品/链接描述
+    listing_id = Column(Integer, nullable=True)
+    status = Column(String(16), default="pending", index=True)  # pending/running/success/failed/paused
+    last_run_at = Column(DateTime, nullable=True)
+    last_error = Column(String(500), default="")
+    success_count = Column(Integer, default=0)
+    fail_count = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.now)
+
+
+class SystemLog(Base):
+    """系统日志（REQ-SPT-603）"""
+    __tablename__ = "system_logs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    level = Column(String(16), default="INFO", index=True)
+    module = Column(String(32), default="", index=True)
+    message = Column(Text)
+    created_at = Column(DateTime, default=datetime.now, index=True)
+
+
+class SystemConfig(Base):
+    """系统配置（REQ-SPT-604）"""
+    __tablename__ = "system_config"
+
+    key = Column(String(191), primary_key=True)
+    value = Column(Text, default="")
+    description = Column(String(255), default="")
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class SensitiveWord(Base):
+    """敏感词库（AI 导购内容过滤）"""
+    __tablename__ = "sensitive_words"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    word = Column(String(64), unique=True, nullable=False, index=True)
+    category = Column(String(32), default="通用")
+    enabled = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.now)
