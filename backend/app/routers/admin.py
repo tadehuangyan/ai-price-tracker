@@ -11,6 +11,7 @@ from ..models import (
     Alert,
     CrawlTask,
     DataSource,
+    KnowledgeArticle,
     Listing,
     PriceSnapshot,
     Product,
@@ -20,7 +21,7 @@ from ..models import (
     Tracking,
     User,
 )
-from ..schemas import ConfigIn, DataSourceIn, SensitiveWordBatchIn, SensitiveWordIn, UserOut
+from ..schemas import ConfigIn, DataSourceIn, KnowledgeIn, SensitiveWordBatchIn, SensitiveWordIn, UserOut
 from ..services.crawler import run_crawl_task
 from ..services.moderation import invalidate_cache
 
@@ -342,4 +343,85 @@ def delete_sensitive_word(word_id: int, db: Session = Depends(get_db), _=Depends
     db.commit()
     invalidate_cache()
     log(db, "moderation", f"删除敏感词：{word}")
+    return {"ok": True}
+
+
+# ---------- 知识库管理（RAG 检索增强） ----------
+
+@router.get("/knowledge")
+def list_knowledge(
+    keyword: str = Query(""),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    _=Depends(require_admin),
+):
+    q = db.query(KnowledgeArticle)
+    if keyword:
+        q = q.filter(
+            KnowledgeArticle.title.contains(keyword)
+            | KnowledgeArticle.tags.contains(keyword)
+            | KnowledgeArticle.content.contains(keyword)
+        )
+    total = q.count()
+    rows = q.order_by(KnowledgeArticle.id).offset((page - 1) * page_size).limit(page_size).all()
+    return {
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "items": [
+            {
+                "id": r.id,
+                "title": r.title,
+                "category": r.category,
+                "tags": r.tags,
+                "content": r.content,
+                "enabled": r.enabled,
+                "created_at": r.created_at.strftime("%Y-%m-%d %H:%M") if r.created_at else None,
+            }
+            for r in rows
+        ],
+    }
+
+
+@router.post("/knowledge")
+def create_knowledge(body: KnowledgeIn, db: Session = Depends(get_db), _=Depends(require_admin)):
+    db.add(KnowledgeArticle(
+        title=body.title.strip(),
+        category=(body.category or "").strip(),
+        tags=(body.tags or "").strip(),
+        content=body.content.strip(),
+        enabled=body.enabled,
+    ))
+    db.commit()
+    log(db, "knowledge", f"新增知识条目：{body.title}")
+    return {"ok": True}
+
+
+@router.put("/knowledge/{article_id}")
+def update_knowledge(
+    article_id: int, body: KnowledgeIn, db: Session = Depends(get_db), _=Depends(require_admin)
+):
+    row = db.query(KnowledgeArticle).get(article_id)
+    if row is None:
+        raise HTTPException(404, "知识条目不存在")
+    row.title = body.title.strip()
+    row.category = (body.category or "").strip()
+    row.tags = (body.tags or "").strip()
+    row.content = body.content.strip()
+    row.enabled = body.enabled
+    db.commit()
+    log(db, "knowledge", f"更新知识条目：{row.title}")
+    return {"ok": True}
+
+
+@router.delete("/knowledge/{article_id}")
+def delete_knowledge(article_id: int, db: Session = Depends(get_db), _=Depends(require_admin)):
+    row = db.query(KnowledgeArticle).get(article_id)
+    if row is None:
+        raise HTTPException(404, "知识条目不存在")
+    title = row.title
+    db.delete(row)
+    db.commit()
+    log(db, "knowledge", f"删除知识条目：{title}")
     return {"ok": True}

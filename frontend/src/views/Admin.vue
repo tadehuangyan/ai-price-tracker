@@ -273,10 +273,95 @@
         </div>
       </el-tab-pane>
 
+      <!-- 知识库 -->
+      <el-tab-pane label="知识库" name="knowledge">
+        <div class="card spec-card group-card">
+          <div class="kicker group-kicker"><span class="pin-dot"></span>06 · KNOWLEDGE · 知识库</div>
+          <div class="muted" style="margin-bottom: 10px">
+            知识库用于 AI 导购的 RAG 检索增强（比价攻略/大促规律/选购指南），回答时会引用并在对话中标注来源。
+          </div>
+          <div class="row" style="margin-bottom: 10px">
+            <div class="row" style="gap: 8px">
+              <el-input
+                v-model="knowledgeKeyword"
+                placeholder="搜索标题/内容"
+                style="width: 220px"
+                clearable
+                @keyup.enter="loadKnowledge(1)"
+              />
+              <el-button type="primary" size="small" class="mag-btn" @click="loadKnowledge(1)">搜索</el-button>
+            </div>
+            <div class="row" style="gap: 8px">
+              <el-button type="primary" size="small" class="mag-btn" @click="openKnowledgeDialog">新增知识</el-button>
+            </div>
+          </div>
+          <el-table :data="knowledge.items" v-loading="loadingKnowledge">
+            <el-table-column prop="id" label="#" width="70" />
+            <el-table-column prop="title" label="标题" min-width="200" show-overflow-tooltip />
+            <el-table-column prop="category" label="分类" width="140" />
+            <el-table-column label="标签" width="220">
+              <template #default="{ row }">
+                <template v-if="splitTags(row.tags).length">
+                  <el-tag v-for="t in splitTags(row.tags)" :key="t" size="small" class="kn-tag">{{ t }}</el-tag>
+                </template>
+                <span v-else class="muted">—</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="启用状态" width="100">
+              <template #default="{ row }">
+                <el-tag :type="row.enabled ? 'success' : 'info'" size="small">{{ row.enabled ? '启用' : '停用' }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="created_at" label="创建时间" width="170" />
+            <el-table-column label="操作" width="140">
+              <template #default="{ row }">
+                <el-button size="small" type="primary" plain @click="editKnowledge(row)">编辑</el-button>
+                <el-button size="small" type="danger" plain @click="removeKnowledge(row)">删除</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+          <div style="margin-top: 12px; display: flex; justify-content: center">
+            <el-pagination
+              background
+              layout="total, prev, pager, next"
+              :total="knowledge.total"
+              :page-size="knowledge.page_size"
+              :current-page="knowledge.page"
+              @current-change="loadKnowledge"
+            />
+          </div>
+
+          <!-- 新增/编辑知识 -->
+          <el-dialog v-model="knowledgeDialog" :title="knowledgeEditingId != null ? '编辑知识条目' : '新增知识条目'" width="520px">
+            <el-form label-width="70px">
+              <el-form-item label="标题">
+                <el-input v-model="knowledgeForm.title" placeholder="输入知识标题" />
+              </el-form-item>
+              <el-form-item label="分类">
+                <el-input v-model="knowledgeForm.category" placeholder="如：比价攻略 / 大促规律 / 选购指南" />
+              </el-form-item>
+              <el-form-item label="标签">
+                <el-input v-model="knowledgeForm.tags" placeholder="多个标签用英文逗号分隔，如：比价攻略,大促规律" />
+              </el-form-item>
+              <el-form-item label="内容">
+                <el-input v-model="knowledgeForm.content" type="textarea" :rows="6" placeholder="输入知识内容（RAG 检索正文）" />
+              </el-form-item>
+              <el-form-item label="启用">
+                <el-switch v-model="knowledgeForm.enabled" />
+              </el-form-item>
+            </el-form>
+            <template #footer>
+              <el-button @click="knowledgeDialog = false">取消</el-button>
+              <el-button type="primary" @click="saveKnowledge">确定</el-button>
+            </template>
+          </el-dialog>
+        </div>
+      </el-tab-pane>
+
       <!-- 日志 -->
       <el-tab-pane label="系统日志" name="logs">
         <div class="card spec-card group-card">
-          <div class="kicker group-kicker"><span class="pin-dot"></span>06 · JOURNAL · 系统日志</div>
+          <div class="kicker group-kicker"><span class="pin-dot"></span>07 · JOURNAL · 系统日志</div>
           <div class="row" style="margin-bottom: 10px">
             <el-radio-group v-model="logLevel" size="small" @change="loadLogs(1)">
               <el-radio-button label="">全部</el-radio-button>
@@ -312,7 +397,7 @@
       <!-- 模拟邮件记录 -->
       <el-tab-pane label="邮件记录" name="mails">
         <div class="card spec-card group-card">
-          <div class="kicker group-kicker"><span class="pin-dot"></span>07 · POST ROOM · 邮件记录</div>
+          <div class="kicker group-kicker"><span class="pin-dot"></span>08 · POST ROOM · 邮件记录</div>
           <div class="row" style="margin-bottom: 10px">
             <el-radio-group v-model="mailCategory" size="small" @change="loadMails(1)">
               <el-radio-button label="">全部</el-radio-button>
@@ -367,7 +452,7 @@
       <!-- 配置 -->
       <el-tab-pane label="系统配置" name="config">
         <div class="card spec-card group-card">
-          <div class="kicker group-kicker"><span class="pin-dot"></span>08 · SETTINGS · 系统配置</div>
+          <div class="kicker group-kicker"><span class="pin-dot"></span>09 · SETTINGS · 系统配置</div>
           <el-table :data="configs" v-loading="loadingConfig">
             <el-table-column prop="key" label="配置项" width="240" />
             <el-table-column prop="description" label="说明" min-width="220" />
@@ -398,7 +483,7 @@
 
 <script setup lang="ts">
 import { nextTick, onMounted, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import api, { errMsg } from '../api'
 import { countUp, magnetic, refreshScroll, revealOnScroll, splitReveal } from '../anim'
 
@@ -589,6 +674,96 @@ async function removeWord(row: any) {
   }
 }
 
+// ---- 知识库（RAG） ----
+const knowledge = ref<any>({ items: [], total: 0, page: 1, page_size: 20 })
+const knowledgeKeyword = ref('')
+const loadingKnowledge = ref(false)
+const knowledgeDialog = ref(false)
+const knowledgeEditingId = ref<number | null>(null)
+const knowledgeForm = ref({ title: '', category: '', tags: '', content: '', enabled: true })
+
+const splitTags = (tags: any): string[] =>
+  String(tags || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+
+async function loadKnowledge(page = 1) {
+  loadingKnowledge.value = true
+  try {
+    const { data } = await api.get('/api/admin/knowledge', {
+      params: { page, keyword: knowledgeKeyword.value },
+    })
+    knowledge.value = data
+  } finally {
+    loadingKnowledge.value = false
+  }
+}
+function openKnowledgeDialog() {
+  knowledgeEditingId.value = null
+  knowledgeForm.value = { title: '', category: '', tags: '', content: '', enabled: true }
+  knowledgeDialog.value = true
+}
+function editKnowledge(row: any) {
+  knowledgeEditingId.value = row.id
+  knowledgeForm.value = {
+    title: row.title ?? '',
+    category: row.category ?? '',
+    tags: row.tags ?? '',
+    content: row.content ?? '',
+    enabled: !!row.enabled,
+  }
+  knowledgeDialog.value = true
+}
+async function saveKnowledge() {
+  const form = knowledgeForm.value
+  const title = form.title.trim()
+  const content = form.content.trim()
+  if (!title) {
+    ElMessage.warning('请输入标题')
+    return
+  }
+  if (!content) {
+    ElMessage.warning('请输入内容')
+    return
+  }
+  const payload = {
+    title,
+    category: form.category.trim(),
+    tags: form.tags.trim(),
+    content,
+    enabled: form.enabled,
+  }
+  const editing = knowledgeEditingId.value != null
+  try {
+    if (editing) await api.put(`/api/admin/knowledge/${knowledgeEditingId.value}`, payload)
+    else await api.post('/api/admin/knowledge', payload)
+    ElMessage.success(editing ? '已保存' : '已添加')
+    knowledgeDialog.value = false
+    loadKnowledge(editing ? knowledge.value.page : 1)
+  } catch (e) {
+    ElMessage.error(errMsg(e))
+  }
+}
+async function removeKnowledge(row: any) {
+  try {
+    await ElMessageBox.confirm('确定删除该知识条目吗？', '提示', {
+      type: 'warning',
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+    })
+  } catch {
+    return
+  }
+  try {
+    await api.delete(`/api/admin/knowledge/${row.id}`)
+    ElMessage.success('已删除')
+    loadKnowledge(knowledge.value.page)
+  } catch (e) {
+    ElMessage.error(errMsg(e))
+  }
+}
+
 // ---- 日志 ----
 const logs = ref<any>({ items: [], total: 0, page: 1, page_size: 30 })
 const logLevel = ref('')
@@ -653,6 +828,7 @@ onMounted(() => {
   loadMails(1)
   loadConfig()
   loadWords(1)
+  loadKnowledge(1)
 })
 
 // ================= 标本手记 · 动效（纯表现层，不改动上方业务逻辑） =================
@@ -664,7 +840,7 @@ function runCounts() {
 }
 
 // 异步数据到位后：关键数字滚动 + 刷新滚动触发器
-watch([stats, sources, tasks, users, words, logs, mails, configs], () => {
+watch([stats, sources, tasks, users, words, knowledge, logs, mails, configs], () => {
   nextTick(() => {
     runCounts()
     refreshScroll()
@@ -740,6 +916,9 @@ onMounted(() => {
   position: static; display: inline-block;
   margin-right: 7px; vertical-align: 1px;
 }
+
+/* —— 知识库：标签小签 —— */
+.kn-tag { margin: 2px 4px 2px 0; }
 
 /* —— 标签页 —— */
 .admin-tabs :deep(.el-tabs__item) { font-family: var(--serif); letter-spacing: 0.08em; }

@@ -16,6 +16,7 @@ JWT_EXPIRE_MINUTES = int(os.getenv("JWT_EXPIRE_MINUTES", "1440"))
 LLM_API_BASE = os.getenv("LLM_API_BASE", "")
 LLM_API_KEY = os.getenv("LLM_API_KEY", "")
 LLM_MODEL = os.getenv("LLM_MODEL", "deepseek-chat")
+LLM_VISION_MODEL = os.getenv("LLM_VISION_MODEL", "")  # 多模态识图模型（OpenAI 兼容），为空回退默认
 
 DATABASE_URL = (
     f"mysql+pymysql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
