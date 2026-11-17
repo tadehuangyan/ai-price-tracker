@@ -45,6 +45,17 @@ export function splitReveal(el: HTMLElement | null, delay = 0) {
   )
 }
 
+/** 找到元素实际所在的滚动容器（布局页在内层 overflow 容器里滚动，ScrollTrigger 需显式指定 scroller，否则永远监听 window 不触发） */
+function findScroller(el: HTMLElement): Element | Window {
+  let node: HTMLElement | null = el.parentElement
+  while (node) {
+    const oy = getComputedStyle(node).overflowY
+    if ((oy === 'auto' || oy === 'scroll') && node.scrollHeight > node.clientHeight + 10) return node
+    node = node.parentElement
+  }
+  return window
+}
+
 /** 滚动入场：区块进入视口时错落浮现 */
 export function revealOnScroll(root: ParentNode = document) {
   const els = Array.from(root.querySelectorAll<HTMLElement>('.reveal'))
@@ -57,6 +68,7 @@ export function revealOnScroll(root: ParentNode = document) {
     if ((el as any).__revealTrigger) (el as any).__revealTrigger.kill()
     ;(el as any).__revealTrigger = ScrollTrigger.create({
       trigger: el,
+      scroller: findScroller(el),
       start: 'top 82%',
       once: true,
       onEnter: () => {
