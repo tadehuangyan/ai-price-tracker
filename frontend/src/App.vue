@@ -1,6 +1,8 @@
 <template>
   <router-view v-slot="{ Component }">
-    <transition name="app-fade" mode="out-in">
+    <!-- :duration 显式给定过渡时长：不依赖 transitionend 回调，
+         避免标签页被节流时过渡卡在 enter-from（opacity:0）导致页面隐形、点击“无响应” -->
+    <transition name="app-fade" mode="out-in" :duration="320">
       <component :is="Component" />
     </transition>
   </router-view>

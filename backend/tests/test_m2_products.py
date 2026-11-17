@@ -124,13 +124,61 @@ def test_search_zero_price_listing_min_price_none(client, db):
     assert r.json()["items"][0]["min_price"] is None
 
 
-# ================= 分类 =================
+# ================= 分类（与慢慢买保持一致） =================
 
-def test_categories_excludes_empty(client, db):
-    _seed_products(db)  # 其中一个 category 为空
+def test_categories_matches_manmanbuy(client):
     r = client.get("/api/products/categories")
-    cats = {c["category"] for c in r.json()}
-    assert cats == {"手机", "数码"}
+    cats = r.json()
+    names = {c["name"] for c in cats}
+    assert {"手机数码", "电脑办公", "家用电器"} <= names
+    assert all("code" in c and c["code"].startswith("cf") for c in cats)
+
+
+# ================= 实时慢慢买数据 =================
+
+def test_live_search_by_keyword(client, monkeypatch):
+    monkeypatch.setattr("app.services.crawler.manmanbuy.discover_products",
+                        lambda keyword, limit=20: _fake_discover(keyword, limit))
+    r = client.get("/api/products/live-search", params={"keyword": "手机", "n": 3})
+    data = r.json()
+    assert data["keyword"] == "手机"
+    assert len(data["items"]) == 3
+    assert all(i["kind"] == "product" for i in data["items"])
+
+
+def test_live_search_by_category_and_cache(client, monkeypatch):
+    calls = []
+    items = [{"title": f"商品{i}", "price": 9.0, "platform": "京东商城",
+              "url": f"https://cu.manmanbuy.com/discuxiao_{i}.aspx", "image": "",
+              "time": "11-17 10:00", "tag": "历史新低", "kind": "deal"} for i in range(5)]
+
+    def fake(cf_code, limit=24):
+        calls.append(cf_code)
+        return items[:limit]
+
+    monkeypatch.setattr("app.services.crawler.manmanbuy.browse_category", fake)
+    products_mod._live_cache.clear()
+    r1 = client.get("/api/products/live-search", params={"category": "cf6", "n": 4})
+    r2 = client.get("/api/products/live-search", params={"category": "cf6", "n": 4})
+    assert len(calls) == 1  # 第二次命中缓存
+    assert len(r1.json()["items"]) == 4 and len(r2.json()["items"]) == 4
+    assert r1.json()["items"][0]["kind"] == "deal"
+
+
+def test_live_product_detail(client, monkeypatch):
+    fake = dict(_fake_query_history_ok("u"), deal_url="https://cu.manmanbuy.com/discuxiao_1.aspx",
+                site_name="京东", history_min=90.0, history_min_date="2026-01-01")
+    monkeypatch.setattr("app.services.crawler.manmanbuy.live_product", lambda url, timeout_ms=0: fake)
+    r = client.get("/api/products/live", params={"url": "https://item.jd.com/x.html"})
+    data = r.json()
+    assert data["title"] == "抓取到的商品"
+    assert data["min_price"] == 90.0 and data["max_price"] == 95.0
+    assert len(data["history"]) == 2
+
+
+def test_live_product_invalid_url_400(client):
+    r = client.get("/api/products/live", params={"url": "javascript:alert(1)"})
+    assert r.status_code == 400
 
 
 # ================= 全网新发现 =================
@@ -207,7 +255,7 @@ def test_import_existing_returns_early(client, db):
 
 def test_import_success_crawl_data_used(client, db, monkeypatch):
     # title/price/platform 全部取爬虫数据；历史价格入库
-    monkeypatch.setattr("app.services.crawler.manmanbuy.query_history", _fake_query_history_ok)
+    monkeypatch.setattr("app.services.crawler.manmanbuy.live_product", _fake_query_history_ok)
     r = client.post("/api/products/import", json={"url": "https://item.jd.com/new1.html", "category": "手机"})
     data = r.json()
     assert data["ok"] is True and "历史价格 2 天" in data["message"] and "历史查询" not in data["message"]
@@ -223,7 +271,7 @@ def test_import_body_fields_fallback(client, db, monkeypatch):
     def fake(url, timeout_ms=0):
         return {"title": "", "image_url": "", "history": [], "price": None, "platform": ""}
 
-    monkeypatch.setattr("app.services.crawler.manmanbuy.query_history", fake)
+    monkeypatch.setattr("app.services.crawler.manmanbuy.live_product", fake)
     r = client.post("/api/products/import", json={
         "url": "https://item.taobao.com/new2.html", "title": "自带标题", "price": 0,
     })
@@ -241,14 +289,14 @@ def test_import_crawl_fail_no_title_502(client, db, monkeypatch):
     def fake(url, timeout_ms=0):
         raise RuntimeError("慢慢买超时")
 
-    monkeypatch.setattr("app.services.crawler.manmanbuy.query_history", fake)
+    monkeypatch.setattr("app.services.crawler.manmanbuy.live_product", fake)
     r = client.post("/api/products/import", json={"url": "https://item.jd.com/new3.html"})
     assert r.status_code == 502 and "未能获取商品标题" in r.json()["detail"]
 
 
 def test_import_crawl_fail_empty_title_502(client, db, monkeypatch):
     # 爬虫成功但标题为空 -> 同样 502（crawl_err 为空的报错分支）
-    monkeypatch.setattr("app.services.crawler.manmanbuy.query_history",
+    monkeypatch.setattr("app.services.crawler.manmanbuy.live_product",
                         lambda url, timeout_ms=0: {"title": "", "image_url": "", "history": [], "price": 1.0, "platform": "jd"})
     r = client.post("/api/products/import", json={"url": "https://item.jd.com/new4.html"})
     assert r.status_code == 502
@@ -259,7 +307,7 @@ def test_import_crawl_fail_with_body_title(client, db, monkeypatch):
     def fake(url, timeout_ms=0):
         raise RuntimeError("解析失败")
 
-    monkeypatch.setattr("app.services.crawler.manmanbuy.query_history", fake)
+    monkeypatch.setattr("app.services.crawler.manmanbuy.live_product", fake)
     r = client.post("/api/products/import", json={
         "url": "https://item.jd.com/new5.html", "title": "手动标题", "price": 66.0,
     })
@@ -271,10 +319,28 @@ def test_import_crawl_fail_with_body_title(client, db, monkeypatch):
 
 def test_import_removes_from_discover_cache(client, db, monkeypatch):
     products_mod._discover_cache["items"] = [{"url": "https://item.jd.com/new6.html", "title": "x"}]
-    monkeypatch.setattr("app.services.crawler.manmanbuy.query_history", _fake_query_history_ok)
+    monkeypatch.setattr("app.services.crawler.manmanbuy.live_product", _fake_query_history_ok)
     r = client.post("/api/products/import", json={"url": "https://item.jd.com/new6.html"})
     assert r.status_code == 200
     assert products_mod._discover_cache["items"] == []
+
+
+def test_import_with_history_skips_crawl(client, db, monkeypatch):
+    # 实时详情已拿到历史价 -> 直接落库，不再触发爬虫
+    def boom(url, timeout_ms=0):
+        raise AssertionError("不应触发爬虫")
+
+    monkeypatch.setattr("app.services.crawler.manmanbuy.live_product", boom)
+    r = client.post("/api/products/import", json={
+        "url": "https://item.jd.com/new7.html", "title": "实时商品", "price": 88.0,
+        "image": "https://img.example.com/7.jpg", "platform": "jd",
+        "history": [{"date": "2026-01-01", "price": 80.0}, {"date": "2026-01-02", "price": 88.0}],
+    })
+    data = r.json()
+    assert data["ok"] is True and "历史价格 2 天" in data["message"]
+    detail = client.get(f"/api/products/{data['product_id']}").json()
+    assert detail["name"] == "实时商品"
+    assert detail["listings"][0]["platform"] == "jd"
 
 
 # ================= 商品详情 =================

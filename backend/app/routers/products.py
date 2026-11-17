@@ -83,13 +83,79 @@ def search(
 
 @router.get("/categories")
 def categories(db: Session = Depends(get_db)):
-    rows = (
-        db.query(Product.category, func.count(Product.id))
-        .filter(Product.category != "")
-        .group_by(Product.category)
-        .all()
-    )
-    return [{"category": c, "count": n} for c, n in rows]
+    """商品查询页分类索引：与慢慢买站内分类保持一致（一级分类）"""
+    from ..services.crawler.manmanbuy import MANMANBUY_CATEGORIES
+
+    return MANMANBUY_CATEGORIES
+
+
+# ---------- 实时数据：全部商品信息均通过慢慢买获取 ----------
+
+_live_cache: dict = {}  # (keyword, category) -> (ts, items)
+LIVE_CACHE_TTL = 300  # 5 分钟
+
+
+@router.get("/live-search")
+def live_search(
+    keyword: str = Query("", max_length=100),
+    category: str = Query("", max_length=20),
+    n: int = Query(24, ge=1, le=60),
+    refresh: int = Query(0),
+):
+    """实时从慢慢买获取商品列表：关键词走比价搜索，分类/默认走全网折扣分类页"""
+    import time
+
+    key = (keyword.strip(), category.strip())
+    cached = _live_cache.get(key)
+    if not refresh and cached and time.time() - cached[0] < LIVE_CACHE_TTL:
+        return {"keyword": keyword, "category": category, "items": cached[1][:n]}
+
+    if keyword.strip():
+        from ..services.crawler.manmanbuy import discover_products
+
+        items = discover_products(keyword.strip(), limit=n)
+        for i in items:
+            i["kind"] = "product"
+    else:
+        from ..services.crawler.manmanbuy import browse_category
+
+        items = browse_category(category.strip(), limit=n)
+
+    _live_cache[key] = (time.time(), items)
+    return {"keyword": keyword, "category": category, "items": items}
+
+
+@router.get("/live")
+def live(url: str = Query("", max_length=500)):
+    """实时商品详情（慢慢买历史价格），不写库；爆料链接自动解析出原始商品链接"""
+    url = url.strip()
+    if not url.startswith(("http://", "https://")):
+        raise HTTPException(400, "商品链接不合法")
+    try:
+        from ..services.crawler.manmanbuy import live_product
+
+        data = live_product(url)
+    except Exception as e:
+        raise HTTPException(502, f"慢慢买实时查询失败：{e}")
+
+    history = data.get("history") or []
+    prices = [p for _, p in history]
+    return {
+        "title": data.get("title", ""),
+        "image_url": data.get("image_url", ""),
+        "price": data.get("price"),
+        "platform": data.get("platform", ""),
+        "site_name": data.get("site_name", ""),
+        "product_url": data.get("product_url", url),
+        "deal_url": data.get("deal_url", ""),
+        "history": history,
+        "min_price": min(prices) if prices else None,
+        "max_price": max(prices) if prices else None,
+        "avg_price": round(sum(prices) / len(prices), 2) if prices else None,
+        "current_price": data.get("price"),
+        "history_min": data.get("history_min"),
+        "history_min_date": data.get("history_min_date"),
+    }
 
 
 # ---------- 全网新发现：展示数据库之外的商品 ----------
@@ -149,16 +215,27 @@ def discover(
     return {"keyword": _discover_cache.get("keyword", ""), "items": items}
 
 
+class HistoryPoint(BaseModel):
+    date: str = Field(max_length=10)
+    price: float
+
+
 class ImportIn(BaseModel):
     url: str = Field(min_length=8, max_length=500)
     title: str = Field(default="", max_length=255)
     price: float | None = None
     category: str = ""
+    image: str = Field(default="", max_length=500)
+    platform: str = Field(default="", max_length=20)
+    history: list[HistoryPoint] = Field(default_factory=list)
 
 
 @router.post("/import")
 def import_product(body: ImportIn, db: Session = Depends(get_db)):
-    """把发现的新商品收录入库：创建商品与报价，并同步查询历史价格"""
+    """把商品收录入库：创建商品与报价，并写入历史价格
+
+    带 history（实时查询结果）时直接落库，否则回退为实时查询慢慢买。
+    """
     if not body.url.startswith(("http://", "https://")):
         raise HTTPException(400, "商品链接不合法")
     existing = db.query(Listing).filter(Listing.url == body.url).first()
@@ -166,22 +243,23 @@ def import_product(body: ImportIn, db: Session = Depends(get_db)):
         return {"ok": True, "product_id": existing.product_id, "message": "商品已在库中"}
 
     title = body.title
-    image = ""
-    history = []
+    image = body.image
+    history = [(h.date, h.price) for h in body.history]
     price = body.price or 0
-    platform = "taobao"
+    platform = body.platform or "taobao"
     crawl_err = ""
-    try:
-        from ..services.crawler.manmanbuy import query_history
+    if not history:
+        try:
+            from ..services.crawler.manmanbuy import live_product
 
-        data = query_history(body.url, timeout_ms=25000)
-        title = title or data["title"]
-        image = data["image_url"]
-        history = data["history"]
-        price = data["price"] or price
-        platform = data["platform"] or platform
-    except Exception as e:
-        crawl_err = str(e)[:200]
+            data = live_product(body.url, timeout_ms=25000)
+            title = title or data["title"]
+            image = image or data["image_url"]
+            history = data["history"]
+            price = data["price"] or price
+            platform = data["platform"] or platform
+        except Exception as e:
+            crawl_err = str(e)[:200]
 
     if not title:
         raise HTTPException(502, f"收录失败：未能获取商品标题（{crawl_err}）")

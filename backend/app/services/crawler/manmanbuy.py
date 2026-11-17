@@ -39,6 +39,29 @@ SITE_PLATFORM_MAP = {
     "亚马逊": "amazon",
 }
 
+# 慢慢买全网折扣一级分类（与慢慢买站内分类导航保持一致，code 为分类页 cf 代码）
+MANMANBUY_CATEGORIES = [
+    {"code": "cf3", "name": "手机数码"},
+    {"code": "cf17", "name": "电脑办公"},
+    {"code": "cf6", "name": "家用电器"},
+    {"code": "cf16", "name": "居家生活"},
+    {"code": "cf5", "name": "家具家装"},
+    {"code": "cf12", "name": "服饰内衣"},
+    {"code": "cf9", "name": "鞋包配饰"},
+    {"code": "cf18", "name": "美妆个护"},
+    {"code": "cf15", "name": "母婴玩具"},
+    {"code": "cf19", "name": "运动户外"},
+    {"code": "cf8", "name": "食品酒水"},
+    {"code": "cf10", "name": "水果生鲜"},
+    {"code": "cf1", "name": "医药保健"},
+    {"code": "cf7", "name": "文化娱乐"},
+    {"code": "cf2", "name": "绿植农宠"},
+    {"code": "cf4", "name": "汽配摩托"},
+    {"code": "cf13", "name": "活动优惠"},
+    {"code": "cf11", "name": "卡券本地"},
+    {"code": "cf14", "name": "其它"},
+]
+
 
 def _parse_date_price(raw: str):
     """解析 datePrice: "[ts,price,note],[ts,price,note]..." -> [(date, price)]"""
@@ -169,7 +192,7 @@ def discover_products(keyword: str, limit: int = 12) -> list:
                 return {
                     href: e.href,
                     text: text,
-                    title: (text.split('|')[0] || '').trim(),
+                    title: (text.split(/[|¥￥]/)[0] || '').trim(),
                     price: m ? parseFloat(m[1]) : null,
                     platform: plat,
                     image: img ? (img.dataset.src || img.src || '') : ''
@@ -197,6 +220,54 @@ def discover_products(keyword: str, limit: int = 12) -> list:
                     "keyword": keyword,
                 }
             )
+            if len(out) >= limit:
+                break
+        return out
+    finally:
+        close_all(p, browser, page)
+
+
+def browse_category(cf_code: str = "", limit: int = 24) -> list:
+    """慢慢买全网折扣分类页：实时抓取该一级分类的最新商品爆料
+
+    cf_code 为空表示「全部分类」；返回 [{title, price, platform, url, image, time, tag, kind:'deal'}]，
+    url 为爆料页链接（需 extract_deal / live_product 解析出原始商品链接）。
+    """
+    from .core import launch_page, close_all
+
+    p, browser, page = launch_page()
+    _load_storage(browser)  # 未登录时分类页会弹验证码拦截
+    try:
+        url = f"https://zhekou.manmanbuy.com/search/{cf_code or '0'}/0/0/0/1"
+        page.goto(url, timeout=40000, wait_until="domcontentloaded")
+        page.wait_for_timeout(4000)
+        cards = page.eval_on_selector_all(
+            "li.item",
+            """els => els.map(e => {
+                const a = e.querySelector('a.itemTitle') || e.querySelector('.cover a');
+                const sub = e.querySelector('a.itemSubTitle');
+                const img = e.querySelector('.cover img');
+                const mall = e.querySelector('.mall');
+                const time = e.querySelector('.time');
+                const tag = e.querySelector('.tag-box span');
+                const m = (sub ? sub.innerText : '').match(/([0-9]+(?:\\.[0-9]+)?)/);
+                return {
+                    title: (a ? (a.innerText || a.getAttribute('title') || '') : '').replace(/\\s+/g, ' ').trim(),
+                    url: a ? a.href : '',
+                    price: m ? parseFloat(m[1]) : null,
+                    image: img ? (img.dataset.src || img.src || '') : '',
+                    platform: mall ? mall.innerText.trim() : '',
+                    time: time ? time.innerText.trim() : '',
+                    tag: tag ? tag.innerText.trim() : ''
+                };
+            })""",
+        )
+        out = []
+        for c in cards:
+            if not c["title"] or not c["url"]:
+                continue
+            c["kind"] = "deal"
+            out.append(c)
             if len(out) >= limit:
                 break
         return out
@@ -251,33 +322,67 @@ def search_deals(keyword: str, limit: int = 10) -> list:
 def extract_deal(deal_url: str) -> dict:
     """爆料页 -> 原始商品链接 + 标题 + 平台链接"""
     from .core import launch_page, close_all
-    from urllib.parse import unquote
 
     p, browser, page = launch_page()
     try:
-        page.goto(deal_url, timeout=30000, wait_until="domcontentloaded")
-        page.wait_for_timeout(2500)
-        title = ""
-        try:
-            title = page.locator("h1").first.inner_text().strip()
-        except Exception:
-            title = (page.title() or "").split("_")[0].strip()
-        hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
-        target = ""
-        signed = [h for h in hrefs if "HistoryLowest.aspx" in h and "st=" in h]
-        if signed:
-            m = re.search(r"url=([^&]+)", signed[0])
-            if m:
-                target = unquote(m.group(1))
-        if not target:
-            m = re.search(r"url=([^&]+)", " ".join(hrefs))
-            if m:
-                target = unquote(m.group(1))
-        # 爆料价
-        text = page.locator("body").inner_text()[:2000]
-        pm = re.search(r"到手价[：:]\s*￥?\s*([0-9.]+)", text)
-        price = float(pm.group(1)) if pm else None
-        return {"title": title, "product_url": target, "deal_price": price, "deal_url": deal_url}
+        return extract_deal_with(page, deal_url)
+    finally:
+        close_all(p, browser, page)
+
+
+def extract_deal_with(page, deal_url: str) -> dict:
+    """在给定 page 上解析爆料页（复用浏览器时使用）"""
+    from urllib.parse import unquote
+
+    page.goto(deal_url, timeout=30000, wait_until="domcontentloaded")
+    page.wait_for_timeout(2500)
+    title = ""
+    try:
+        title = page.locator("h1").first.inner_text().strip()
+    except Exception:
+        title = (page.title() or "").split("_")[0].strip()
+    hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+    target = ""
+    signed = [h for h in hrefs if "HistoryLowest.aspx" in h and "st=" in h]
+    if signed:
+        m = re.search(r"url=([^&]+)", signed[0])
+        if m:
+            target = unquote(m.group(1))
+    if not target:
+        m = re.search(r"url=([^&]+)", " ".join(hrefs))
+        if m:
+            target = unquote(m.group(1))
+    # 爆料价
+    text = page.locator("body").inner_text()[:2000]
+    pm = re.search(r"到手价[：:]\s*￥?\s*([0-9.]+)", text)
+    price = float(pm.group(1)) if pm else None
+    return {"title": title, "product_url": target, "deal_price": price, "deal_url": deal_url}
+
+
+def live_product(url: str, timeout_ms: int = 30000) -> dict:
+    """实时商品详情（不写库）：任意商品/爆料链接 -> 慢慢买历史价格全量数据
+
+    爆料链接（cu.manmanbuy.com/discuxiao_*）先解析出原始商品链接；一次浏览器会话完成。
+    """
+    if not os.path.exists(STORAGE_PATH):
+        raise RuntimeError("缺少慢慢买登录态，请先运行 scripts/login_manmanbuy.py 扫码登录")
+
+    from .core import launch_page, close_all
+
+    p, browser, page = launch_page()
+    try:
+        _load_storage(browser)
+        target = url
+        deal_url = ""
+        if "manmanbuy.com/discuxiao" in url:
+            deal_url = url
+            info = extract_deal_with(page, url)
+            target = (info.get("product_url") or "").strip()
+            if not target:
+                raise RuntimeError("未能从爆料页解析出原始商品链接")
+        data = query_history_with(page, target, timeout_ms)
+        data["deal_url"] = deal_url
+        return data
     finally:
         close_all(p, browser, page)
 

@@ -35,7 +35,7 @@
               </el-button>
             </span>
             <span class="magnetic btn-magnet" ref="compareBtnRef">
-              <el-button @click="router.push(`/compare?ids=${product.id}`)">多平台比价</el-button>
+              <el-button @click="goCompare">多平台比价</el-button>
             </span>
           </div>
           <!-- AI 导购快捷输入口：带商品信息 + 问题跳转聊天 -->
@@ -91,6 +91,9 @@
           </el-radio-group>
         </div>
         <div class="annot chart-note lead-line">图注：曲线取每日最低采集价，朱砂圆点标记史低，虚线为当前价水平线。</div>
+        <div class="annot chart-note" v-if="isLive && liveLoading" style="color: var(--green)">
+          正在实时采集慢慢买历史价格，请稍候…
+        </div>
         <div class="stats" v-if="trend">
           <div class="stat"><div class="label">当前价</div><div class="value price">￥{{ trend.current_price ?? '--' }}</div></div>
           <div class="stat min"><div class="label">{{ days }} 天最低</div><div class="value">￥{{ trend.min_price ?? '--' }}</div></div>
@@ -127,7 +130,20 @@ import { splitReveal, revealOnScroll, refreshScroll, countUp, magnetic, popIn, p
 
 const route = useRoute()
 const router = useRouter()
-const id = Number(route.params.id)
+// 实时模式（/product/live）：商品信息即查即看，全部数据实时来自慢慢买，追踪/比价时才入库
+const isLive = route.params.id === 'live'
+const id = isLive ? 0 : Number(route.params.id)
+const liveQuery = {
+  url: String(route.query.url || ''),
+  title: String(route.query.title || ''),
+  price: Number(route.query.price) || 0,
+  image: String(route.query.image || ''),
+  platform: String(route.query.platform || ''),
+  deal: String(route.query.deal || '') === '1',
+}
+const liveData = ref<any>(null) // 慢慢买实时返回（含全量 history）
+const liveLoading = ref(false)
+const importedId = ref<number | null>(null)
 const placeholder =
   'https://trae-api-cn.mchost.guru/api/ide/v1/text_to_image?prompt=minimal%20white%20product%20placeholder%20shopping%20bag%20flat%20design&image_size=square'
 
@@ -150,7 +166,7 @@ const trackBtnRef = ref<HTMLElement | null>(null)
 const compareBtnRef = ref<HTMLElement | null>(null)
 
 // —— 铭牌展示信息（纯展示派生，不动数据逻辑） ——
-const specimenNo = computed(() => String(id).padStart(3, '0'))
+const specimenNo = computed(() => (isLive ? 'LIVE' : String(id).padStart(3, '0')))
 const collectedAt = computed(() => {
   const pts = trend.value?.points
   return Array.isArray(pts) && pts.length ? pts[0].date : ''
@@ -200,14 +216,113 @@ async function load() {
   }
 }
 async function loadTrend() {
+  if (isLive) {
+    applyLiveTrend()
+    return
+  }
   const { data } = await api.get(`/api/tracking/trend/${id}`, { params: { days: days.value } })
   trend.value = data
+}
+
+// —— 实时模式：慢慢买即查即看 ——
+
+// 先用跳转携带的卡片信息立即渲染铭牌，历史价后台实时采集
+function seedLiveProduct() {
+  product.value = {
+    id: 0,
+    name: liveQuery.title || '实时商品',
+    image_url: liveQuery.image,
+    category: '',
+    brand: '',
+    min_price: liveQuery.price || null,
+    listings: [],
+  }
+}
+
+function applyLiveTrend() {
+  const d = liveData.value
+  if (!d) return
+  const cutoff = new Date(Date.now() - days.value * 86400000).toISOString().slice(0, 10)
+  const pts = (d.history || [])
+    .filter((h: any) => h[0] >= cutoff)
+    .map((h: any) => ({ date: h[0], price: h[1] }))
+  const prices = pts.map((p: any) => p.price)
+  trend.value = {
+    points: pts,
+    min_price: prices.length ? Math.min(...prices) : null,
+    max_price: prices.length ? Math.max(...prices) : null,
+    avg_price: prices.length
+      ? Math.round((prices.reduce((a: number, b: number) => a + b, 0) / prices.length) * 100) / 100
+      : null,
+    current_price: d.price,
+  }
+}
+
+async function loadLive() {
+  liveLoading.value = true
+  try {
+    const { data } = await api.get('/api/products/live', {
+      params: { url: liveQuery.url },
+      timeout: 90000, // 慢慢买实时查询（爆料链接需先解析），给足超时
+    })
+    liveData.value = data
+    product.value = {
+      id: 0,
+      name: data.title || product.value.name,
+      image_url: data.image_url || product.value.image_url,
+      category: '',
+      brand: '',
+      min_price: data.min_price ?? product.value.min_price,
+      listings: [
+        {
+          id: 0,
+          platform: data.platform || liveQuery.platform || 'web',
+          url: data.product_url || liveQuery.url,
+          title: data.title || product.value.name,
+          current_price: data.price,
+          last_crawled_at: new Date().toISOString().slice(0, 16).replace('T', ' '),
+        },
+      ],
+    }
+    applyLiveTrend()
+  } catch (e) {
+    ElMessage.error(errMsg(e))
+  } finally {
+    liveLoading.value = false
+    refreshScroll()
+  }
+}
+
+// 实时模式：追踪/比价/导购前先按需收录入库（带实时历史价，不重复爬取）
+async function ensureImported(): Promise<number> {
+  if (importedId.value) return importedId.value
+  const d = liveData.value
+  const msg = ElMessage({ message: '正在收录入库…', type: 'info', duration: 0 })
+  try {
+    const { data } = await api.post(
+      '/api/products/import',
+      {
+        url: d?.product_url || liveQuery.url,
+        title: product.value?.name || liveQuery.title,
+        price: d?.price ?? liveQuery.price ?? null,
+        image: product.value?.image_url || liveQuery.image,
+        platform: d?.platform || '',
+        history: (d?.history || []).map((h: any) => ({ date: h[0], price: h[1] })),
+      },
+      { timeout: 60000 }
+    )
+    importedId.value = data.product_id
+    return data.product_id
+  } finally {
+    msg.close()
+  }
 }
 async function addTracking() {
   trackLoading.value = true
   try {
+    const pid = isLive ? await ensureImported() : id
     const { data } = await api.post('/api/tracking', {
-      product_id: id,
+      product_id: pid,
       target_price: targetPrice.value ?? null,
     })
     ElMessage.success(data.message)
@@ -218,10 +333,16 @@ async function addTracking() {
     trackLoading.value = false
   }
 }
+// 多平台比价（实时模式先按需收录入库）
+async function goCompare() {
+  const pid = isLive ? await ensureImported() : id
+  router.push(`/compare?ids=${pid}`)
+}
 // 快捷输入口：带当前商品 + 问题跳转 AI 导购聊天页
-function goAdvisor() {
+async function goAdvisor() {
   const q = askQuestion.value.trim()
-  const base = `/advisor?product=${id}`
+  const pid = isLive ? await ensureImported() : id
+  const base = `/advisor?product=${pid}`
   router.push(q ? `${base}&q=${encodeURIComponent(q)}` : base)
 }
 
@@ -240,8 +361,15 @@ async function animate() {
 }
 
 onMounted(async () => {
-  await load()
-  animate()
+  if (isLive) {
+    seedLiveProduct() // 铭牌立即渲染
+    await nextTick()
+    animate() // 动效不等数据
+    loadLive() // 历史价后台实时采集
+  } else {
+    await load()
+    animate()
+  }
 })
 
 onUnmounted(() => {
