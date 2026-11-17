@@ -44,6 +44,41 @@
           开始对比
         </el-button>
       </div>
+      <!-- 链接收录 / 收藏商品加入对比 -->
+      <div class="stage-row stage-extra">
+        <div class="link-add">
+          <el-input
+            v-model="linkUrl"
+            placeholder="粘贴商品链接，收录后加入对比（京东/淘宝等）"
+            clearable
+            class="link-input"
+            @keyup.enter="addByLink"
+          >
+            <template #prefix><el-icon><Link /></el-icon></template>
+          </el-input>
+          <el-button class="mag-btn" :loading="linkLoading" @click="addByLink">收录并加入</el-button>
+        </div>
+        <el-popover placement="bottom-end" :width="360" trigger="click" v-model:visible="favVisible">
+          <template #reference>
+            <el-button class="mag-btn">＋ 收藏商品</el-button>
+          </template>
+          <div class="fav-list">
+            <div class="panel-title">价格追踪（收藏栏）· 点击加入对比</div>
+            <div v-for="t in trackings" :key="t.id" class="fav-item" @click="addFromFav(t)">
+              <img :src="t.image_url || placeholder" class="fav-img" />
+              <div class="fav-info">
+                <div class="fav-name">{{ t.product_name }}</div>
+                <div class="fav-price">
+                  <span v-if="t.current_price" class="price">￥{{ t.current_price }}</span>
+                  <span v-if="t.target_price" class="muted">目标 ￥{{ t.target_price }}</span>
+                </div>
+              </div>
+              <el-button size="small" type="primary" plain round>加入</el-button>
+            </div>
+            <el-empty v-if="!trackings.length" description="暂无收藏商品" :image-size="50" />
+          </div>
+        </el-popover>
+      </div>
       <p class="annot stage-note">选 1~5 件标本置于台上，同台列价，一观高下。</p>
     </section>
 
@@ -198,6 +233,70 @@ const result = ref<any>(null)
 const barEl = ref<HTMLDivElement>()
 let barChart: echarts.ECharts | null = null
 
+// —— 链接收录 / 收藏商品加入对比 ——
+const placeholder =
+  'https://trae-api-cn.mchost.guru/api/ide/v1/text_to_image?prompt=minimal%20white%20product%20placeholder%20shopping%20bag%20flat%20design&image_size=square'
+const linkUrl = ref('')
+const linkLoading = ref(false)
+const favVisible = ref(false)
+const trackings = ref<any[]>([])
+
+function pushSelected(pid: number, name: string) {
+  if (!pid) return
+  if (selected.value.includes(pid)) {
+    ElMessage.info('该商品已在对比台上')
+    return
+  }
+  if (selected.value.length >= 5) {
+    ElMessage.warning('单次最多对比 5 个商品')
+    return
+  }
+  if (!options.value.some((o) => o.id === pid)) options.value.push({ id: pid, name })
+  selected.value.push(pid)
+}
+
+// 粘贴链接 -> 收录入库（实时爬取慢慢买）-> 加入对比台
+async function addByLink() {
+  const url = linkUrl.value.trim()
+  if (!/^https?:\/\//i.test(url)) {
+    ElMessage.warning('请粘贴合法的商品链接（http/https）')
+    return
+  }
+  linkLoading.value = true
+  try {
+    const { data } = await api.post('/api/products/import', { url }, { timeout: 60000 })
+    let name = `商品 #${data.product_id}`
+    try {
+      const { data: p } = await api.get(`/api/products/${data.product_id}`)
+      name = p.name || name
+    } catch {
+      /* 名称取不到时用兜底标签 */
+    }
+    pushSelected(data.product_id, name)
+    ElMessage.success(data.message || '已收录并加入对比')
+    linkUrl.value = ''
+  } catch (e) {
+    ElMessage.error(errMsg(e))
+  } finally {
+    linkLoading.value = false
+  }
+}
+
+// 收藏商品（价格追踪）-> 直接加入对比台
+function addFromFav(t: any) {
+  favVisible.value = false
+  pushSelected(t.product_id, t.product_name)
+}
+
+async function loadTrackings() {
+  try {
+    const { data } = await api.get('/api/tracking')
+    trackings.value = data
+  } catch {
+    /* 未登录等情况忽略 */
+  }
+}
+
 const rootEl = ref<HTMLDivElement | null>(null)
 const titleEl = ref<HTMLHeadingElement | null>(null)
 const emptyPinEl = ref<HTMLSpanElement | null>(null)
@@ -311,6 +410,7 @@ onMounted(async () => {
   splitReveal(titleEl.value, 0.12)
   await playPage()
   if (!result.value) pinPress(emptyPinEl.value)
+  loadTrackings()
   const ids = route.query.ids
   if (ids) {
     selected.value = String(ids).split(',').map(Number).filter(Boolean)
@@ -371,6 +471,34 @@ onUnmounted(() => {
 .picker { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
 .days-group { margin-left: 0; }
 .stage-note { margin: 12px 0 0; font-size: 12.5px; }
+
+/* —— 链接收录 / 收藏商品加入 —— */
+.stage-extra { margin-top: 12px; }
+.link-add { display: flex; align-items: center; gap: 10px; flex: 1; }
+.link-input { width: 460px; max-width: 100%; }
+.fav-list { max-height: 280px; overflow-y: auto; }
+.panel-title {
+  font-family: var(--mono); font-size: 10px; letter-spacing: 0.16em;
+  color: var(--ink-faint); margin-bottom: 8px; text-transform: uppercase;
+}
+.fav-item {
+  display: flex; align-items: center; gap: 10px; padding: 8px;
+  border-radius: 2px; cursor: pointer;
+  border-bottom: 1px dashed var(--line);
+  transition: background 0.15s;
+}
+.fav-item:last-child { border-bottom: none; }
+.fav-item:hover { background: var(--green-soft); }
+.fav-img {
+  width: 40px; height: 40px; object-fit: contain; background: var(--paper-2);
+  border: 1px solid var(--line); border-radius: 1px; flex-shrink: 0;
+}
+.fav-info { flex: 1; min-width: 0; }
+.fav-name {
+  font-family: var(--kai); font-size: 13px; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; color: var(--ink);
+}
+.fav-price { font-size: 12px; display: flex; gap: 8px; margin-top: 2px; }
 
 /* —— 空态：比价台空置 —— */
 .empty-stage { position: relative; padding: 28px 22px 26px; }

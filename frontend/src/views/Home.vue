@@ -58,10 +58,27 @@
     <!-- 标本展位 -->
     <div class="shelf-head">
       <div class="kicker"><span class="pin-dot"></span>SPECIMEN SHELF · 标本展位</div>
-      <div class="annot shelf-count">在架标本 {{ total }} 件 · 实时来自慢慢买</div>
+      <div class="annot shelf-count">
+        <span v-if="loading && !allItems.length" class="sk-status">
+          <span class="rec-label">标本采集中</span>
+          <span class="pen-dot"></span><span class="pen-dot"></span><span class="pen-dot"></span>
+        </span>
+        <template v-else>在架标本 {{ total }} 件 · 实时来自慢慢买</template>
+      </div>
     </div>
 
-    <div v-loading="loading" element-loading-text="标本采集中" class="grid" ref="gridRef">
+    <!-- 加载占位：骨架标本卡（遮盖实时爬取的空白期） -->
+    <div v-if="loading && !allItems.length" class="grid skeleton">
+      <div v-for="i in 12" :key="i" class="sk-card spec-card">
+        <div class="sk-line sk-lot"></div>
+        <div class="sk-img"></div>
+        <div class="sk-line"></div>
+        <div class="sk-line sk-short"></div>
+        <div class="sk-line sk-note"></div>
+      </div>
+    </div>
+
+    <div v-else v-loading="loading" element-loading-text="标本采集中" class="grid" ref="gridRef">
       <div
         v-for="(p, i) in displayItems"
         :key="p.url"
@@ -284,6 +301,40 @@ onUnmounted(() => {
   padding-bottom: 8px;
 }
 .shelf-count { font-size: 12px; }
+
+/* —— 加载占位：骨架标本卡（遮盖实时爬取的空白期） —— */
+.sk-status { display: inline-flex; align-items: center; gap: 5px; }
+.rec-label {
+  font-family: var(--kai); color: var(--ink-faint); font-size: 12px; letter-spacing: 0.14em;
+}
+.pen-dot {
+  width: 6px; height: 6px; border-radius: 50%; background: var(--pin);
+  animation: pen-blink 1.2s infinite both;
+}
+.pen-dot:nth-child(3) { animation-delay: .2s; }
+.pen-dot:nth-child(4) { animation-delay: .4s; }
+@keyframes pen-blink {
+  0%, 80%, 100% { opacity: .25; transform: translateY(0); }
+  40% { opacity: 1; transform: translateY(-3px); }
+}
+.sk-card { padding: 12px 14px; pointer-events: none; }
+.sk-img {
+  height: 160px; border: 1px solid var(--line); border-radius: 2px;
+  background: var(--paper-3); animation: sk-pulse 1.1s ease-in-out infinite;
+}
+.sk-line {
+  height: 12px; border-radius: 2px; background: var(--paper-3);
+  margin-top: 10px; animation: sk-pulse 1.1s ease-in-out infinite;
+}
+.sk-lot { width: 40%; height: 9px; margin-top: 0; }
+.sk-short { width: 55%; }
+.sk-note { width: 75%; height: 9px; margin-top: 12px; }
+.sk-card:nth-child(2n) :is(.sk-img, .sk-line) { animation-delay: .3s; }
+.sk-card:nth-child(3n) :is(.sk-img, .sk-line) { animation-delay: .6s; }
+@keyframes sk-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .45; }
+}
 .grid {
   display: grid; grid-template-columns: repeat(6, 1fr);
   gap: 16px; min-height: 200px;

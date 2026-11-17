@@ -78,8 +78,12 @@
               </div>
               <!-- 购买建议卡（结构化输出） -->
               <AdviceCard v-if="m.adviceCard" :card="m.adviceCard" />
+              <!-- 等待大模型响应：三点循环跳动 -->
+              <div v-if="m.typing && !m.content" class="typing-dots">
+                <span class="pen-dot"></span><span class="pen-dot"></span><span class="pen-dot"></span>
+              </div>
               <div
-                v-if="m.content || m.typing"
+                v-else-if="m.content || m.typing"
                 :class="['content', { md: m.role === 'assistant' }]"
                 v-html="m.role === 'assistant' ? renderMd(m.typing ? m.content + CURSOR_HTML : m.content) : escapeHtml(m.content)"
               ></div>
@@ -116,7 +120,7 @@
           <el-input
             v-model="input"
             type="textarea"
-            :rows="2"
+            :rows="1"
             resize="none"
             :placeholder="inputPlaceholder"
             @paste="onPaste"
@@ -343,32 +347,24 @@ import api, { errMsg } from '../api'
 import { useAuthStore } from '../store'
 import { magnetic, pinPress, popIn, refreshScroll, splitReveal } from '../anim'
 import AdviceCard from '../components/AdviceCard.vue'
+import {
+  messages,
+  sessions,
+  currentId,
+  currentSession,
+  sortedSessions,
+  sessionProductId,
+  sending,
+  newChat as storeNewChat,
+  switchSession as storeSwitchSession,
+  removeSession as storeRemoveSession,
+} from '../chatStore'
+import type { Msg } from '../chatStore'
 
 const route = useRoute()
 const auth = useAuthStore()
 
-interface AdviceCardData {
-  action: 'buy' | 'wait' | 'watch'
-  confidence: number
-  summary: string
-  evidence: string[]
-}
-
-interface Msg {
-  role: 'user' | 'assistant'
-  content: string
-  loading?: boolean
-  typing?: boolean  // 打字机逐字输出中
-  tip?: string
-  fallback?: boolean
-  images?: string[]
-  files?: { name: string; url: string }[]
-  productInfo?: { id: number; name: string; price: number | null; image: string }
-  raw?: string  // 发送给 AI 的原文（含 [[product:N]] 标记）
-  toolEvents?: { name: string; status: string; summary?: string }[]  // Agent 工具调用过程
-  adviceCard?: AdviceCardData  // 购买建议卡（结构化输出）
-  sources?: { id: number; title: string }[]  // 知识库引用来源（RAG 溯源）
-}
+// 会话/消息类型见 chatStore.ts（模块级共享存储，切页不断流）
 
 // Agent 工具展示名（与后端 agent_tools.TOOL_LABELS 对应）
 const TOOL_LABELS: Record<string, string> = {
@@ -387,100 +383,7 @@ function toolLabel(name: string) {
   return TOOL_LABELS[name] || name || '调用工具'
 }
 
-// ================= 多会话历史对话（localStorage 持久化） =================
-interface Session {
-  id: string
-  title: string
-  createdAt: number
-  updatedAt: number
-  messages: Msg[]
-}
-const SESSIONS_KEY = 'spt_advisor_sessions'
-const LEGACY_CHAT_KEY = 'spt_advisor_chat' // 旧版单会话存档（迁移用）
-const MAX_SESSIONS = 20
-
-const WELCOME_TEXT =
-  '你好，我是 AI 智能导购。\n' +
-  '· 发送商品链接，我会抓取它的历史价格帮你分析\n' +
-  '· 点击右侧 + → 收藏商品，把价格追踪的商品发给我\n' +
-  '· 也可以直接问我什么时候买最划算'
-
-function newSessionId() {
-  return Date.now().toString(36) + Math.random().toString(36).slice(2, 6)
-}
-
-function makeSession(msgs: Msg[] = []): Session {
-  return { id: newSessionId(), title: '新对话', createdAt: Date.now(), updatedAt: Date.now(), messages: msgs }
-}
-
-// 恢复时重置未完成的加载/打字态
-function resetInterrupted(msgs: Msg[]) {
-  for (const m of msgs) {
-    if (m.loading || m.typing) {
-      m.loading = false
-      m.typing = false
-      m.content = m.content || '（上次对话被中断，请重新发送）'
-    }
-  }
-}
-
-function loadSessions(): Session[] {
-  try {
-    const raw = localStorage.getItem(SESSIONS_KEY)
-    if (raw) {
-      const list: Session[] = JSON.parse(raw)
-      for (const s of list) resetInterrupted(s.messages)
-      return list
-    }
-  } catch {
-    /* 解析失败则尝试旧版存档 */
-  }
-  // 旧版单会话（sessionStorage）迁移为首个历史会话
-  try {
-    const saved = sessionStorage.getItem(LEGACY_CHAT_KEY)
-    if (saved) {
-      const msgs: Msg[] = JSON.parse(saved)
-      resetInterrupted(msgs)
-      return [makeSession(msgs)]
-    }
-  } catch {
-    /* 无旧存档 */
-  }
-  return []
-}
-
-const sessions = ref<Session[]>(loadSessions())
-if (!sessions.value.length) {
-  sessions.value = [makeSession([{ role: 'assistant', content: WELCOME_TEXT }])]
-}
-const currentId = ref(sessions.value[sessions.value.length - 1]?.id || '')
-const currentSession = computed(
-  () => sessions.value.find((s) => s.id === currentId.value) || sessions.value[0]
-)
-const messages = computed<Msg[]>({
-  get: () => currentSession.value?.messages ?? [],
-  set: (v) => {
-    if (currentSession.value) currentSession.value.messages = v
-  },
-})
-
-const sortedSessions = computed(() =>
-  [...sessions.value].sort((a, b) => b.updatedAt - a.updatedAt)
-)
-
-watch(
-  sessions,
-  (v) => {
-    try {
-      localStorage.setItem(SESSIONS_KEY, JSON.stringify(v))
-    } catch {
-      /* 存储超限忽略 */
-    }
-  },
-  { deep: true }
-)
 const input = ref('')
-const sending = ref(false)
 const bodyEl = ref<HTMLDivElement>()
 const trackings = ref<any[]>([])
 const panelVisible = ref(false)
@@ -868,7 +771,14 @@ async function pushUser(
       scrollBottom()
     }
     const r = await streamChat(
-      { message: text, history, product_id: productId ?? null, images, files, ai_config: currentAiConfig() },
+      {
+        message: text,
+        history,
+        product_id: productId ?? productInfo?.id ?? sessionProductId.value ?? null,
+        images,
+        files,
+        ai_config: currentAiConfig(),
+      },
       (t) => {
         pendingText += t
         if (Date.now() - lastRender >= 80) flush()
@@ -1056,35 +966,22 @@ async function loadTrackings() {
   }
 }
 
-// ---- 历史对话：新建 / 切换 / 删除 ----
+// ---- 历史对话：新建 / 切换 / 删除（状态在 chatStore，组件只管 UI） ----
 const historyVisible = ref(false)
 
 function newChat() {
   historyVisible.value = false
-  if (!currentSession.value?.messages.length) return // 当前已是空会话
-  const s = makeSession([])
-  sessions.value.unshift(s)
-  currentId.value = s.id
-  if (sessions.value.length > MAX_SESSIONS) {
-    // 保留最近 MAX_SESSIONS 个会话（优先淘汰最久未活跃的非当前会话）
-    const rest = sortedSessions.value.filter((x) => x.id !== s.id)
-    const drop = rest.slice(MAX_SESSIONS - 1)
-    for (const d of drop) removeSession(d.id)
-  }
+  storeNewChat()
 }
 
 function switchSession(id: string) {
-  currentId.value = id
+  storeSwitchSession(id)
   historyVisible.value = false
   scrollBottom()
 }
 
 function removeSession(id: string) {
-  const idx = sessions.value.findIndex((s) => s.id === id)
-  if (idx < 0) return
-  sessions.value.splice(idx, 1)
-  if (!sessions.value.length) sessions.value = [makeSession([])]
-  if (currentId.value === id) currentId.value = sessions.value[0].id
+  storeRemoveSession(id)
 }
 
 function fmtTime(ts: number) {
@@ -1261,6 +1158,11 @@ onMounted(() => {
   0%, 100% { opacity: 1; }
   50% { opacity: 0; }
 }
+
+/* —— 等待大模型响应：三点循环跳动 —— */
+.typing-dots { display: inline-flex; align-items: center; gap: 5px; height: 24px; }
+.typing-dots .pen-dot:nth-child(2) { animation-delay: 0.2s; }
+.typing-dots .pen-dot:nth-child(3) { animation-delay: 0.4s; }
 
 /* —— 粘贴/选择的附件预览 —— */
 .pending-row {
@@ -1488,8 +1390,9 @@ onMounted(() => {
 .input-main .el-input { flex: 1; }
 .input-main :deep(.el-textarea__inner) {
   background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius);
-  box-shadow: none; font-family: var(--kai); font-size: 14px; line-height: 1.7;
-  letter-spacing: 0.03em; padding: 10px 12px;
+  box-shadow: none; font-family: var(--kai); font-size: 14px; line-height: 30px;
+  letter-spacing: 0.03em; padding: 0 12px;
+  height: 32px; min-height: 32px !important; /* 与发送按钮（el-button 默认 32px）同高 */
 }
 .input-main :deep(.el-textarea__inner:focus) {
   border-color: var(--green); box-shadow: 0 0 0 1.5px rgba(60, 90, 69, 0.18);
