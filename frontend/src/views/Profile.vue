@@ -1,7 +1,7 @@
 <template>
   <div class="page" ref="pageEl">
     <div class="page-head">
-      <img src="/deco/fern-sprig.png" alt="" aria-hidden="true" class="deco deco-fern" />
+      <img src="/deco/quill-ink.png" alt="" aria-hidden="true" class="deco deco-quill" />
       <div class="kicker"><span class="pin-dot"></span>PERSONAL FILE · 个人档案</div>
       <h2 class="page-title" ref="titleEl">个人中心</h2>
       <div class="page-sub">身份、凭证与往来信札 · 均记录在案</div>
@@ -30,7 +30,6 @@
     <el-tabs v-model="tab" class="profile-tabs">
       <el-tab-pane label="个人资料" name="profile">
         <div class="card spec-card file-card reveal" data-delay="160">
-          <img src="/deco/wax-seal.png" alt="" aria-hidden="true" class="deco deco-wax" />
           <div class="kicker"><span class="pin-dot"></span>DOSSIER · 资料卡</div>
           <h3 class="card-title">个人资料</h3>
           <el-form :model="form" label-width="150px">
@@ -324,13 +323,9 @@ onMounted(() => {
 .file-card:hover { transform: none; box-shadow: var(--shadow-md); }
 /* —— 透明装饰素材（标本点缀，纯表现层） —— */
 .deco { position: absolute; pointer-events: none; user-select: none; z-index: 2; }
-.deco-wax {
-  width: 72px; top: 12px; right: 16px;
-  transform: rotate(-8deg); opacity: 0.92;
-}
-.deco-fern {
-  width: 95px; right: 12px; top: -6px;
-  transform: rotate(-7deg); opacity: 0.7;
+.deco-quill {
+  width: 105px; right: 12px; top: -6px;
+  transform: rotate(5deg); opacity: 0.8;
 }
 .card-title {
   font-family: var(--serif); font-size: 18px; font-weight: 700;

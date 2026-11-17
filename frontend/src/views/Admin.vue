@@ -5,7 +5,8 @@
       <h2 class="page-title" ref="titleEl">系统管理</h2>
       <div class="page-sub reveal" data-delay="90">标本的采集、登记与剔除 · 皆由馆务执掌</div>
       <span class="seal head-seal">馆务钤记</span>
-      <img src="/deco/fern-sprig.png" alt="" aria-hidden="true" class="deco deco-fern" />
+      <img src="/deco/quill-ink.png" alt="" aria-hidden="true" class="deco deco-quill" />
+      <img src="/deco/beetle.png" alt="" aria-hidden="true" class="deco deco-beetle" />
     </div>
     <el-tabs v-model="tab" class="admin-tabs">
       <!-- 统计概览 -->
@@ -689,8 +690,12 @@ onMounted(() => {
 
 /* —— 透明装饰素材（标本点缀，纯表现层） —— */
 .deco { position: absolute; pointer-events: none; user-select: none; z-index: 2; }
-.deco-fern {
+.deco-quill {
   width: 90px; right: 2px; top: -18px;
+  transform: rotate(-5deg); opacity: 0.75;
+}
+.deco-beetle {
+  width: 70px; left: 4px; top: -22px;
   transform: rotate(8deg); opacity: 0.7;
 }
 

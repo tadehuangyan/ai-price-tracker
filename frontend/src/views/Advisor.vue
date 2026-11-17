@@ -3,7 +3,7 @@
     <div class="card chat-card spec-card">
       <!-- 头部：研究员手记 -->
       <div class="chat-head">
-        <img src="/deco/beetle.png" alt="" aria-hidden="true" class="deco deco-beetle" />
+        <img src="/deco/butterfly.png" alt="" aria-hidden="true" class="deco deco-butterfly" />
         <div class="head-left">
           <span class="pin head-pin" ref="headPin"></span>
           <div class="head-text">
@@ -24,7 +24,6 @@
       <div class="chat-body" ref="bodyEl">
         <div v-if="!messages.length" class="chat-empty">
           <img src="/deco/fern-sprig.png" alt="" aria-hidden="true" class="deco deco-fern" />
-          <img src="/deco/flower-sprig.png" alt="" aria-hidden="true" class="deco deco-flower" />
           <div class="kicker"><span class="pin-dot"></span>NEW PLATE · 新的一页</div>
           <el-icon :size="42" color="#b9aa8e"><ChatDotRound /></el-icon>
           <p class="lead-text">把商品发给我，帮你分析历史价格、判断购买时机</p>
@@ -861,17 +860,13 @@ onMounted(() => {
 
 /* —— 透明装饰素材（标本点缀，纯表现层） —— */
 .deco { position: absolute; pointer-events: none; user-select: none; z-index: 2; }
-.deco-beetle {
-  width: 70px; top: -22px; right: -10px;
-  transform: rotate(9deg); opacity: 0.8;
+.deco-butterfly {
+  width: 75px; top: -22px; right: -10px;
+  transform: rotate(-6deg); opacity: 0.8;
 }
 .deco-fern {
   width: 110px; left: 6%; top: -44px;
   transform: rotate(-9deg); opacity: 0.8;
-}
-.deco-flower {
-  width: 84px; right: 7%; top: -22px;
-  transform: rotate(8deg); opacity: 0.75;
 }
 
 .msg-row { display: flex; margin-bottom: 16px; gap: 10px; align-items: flex-start; }
