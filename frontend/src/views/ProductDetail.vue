@@ -1,3 +1,8 @@
+/**
+ * 商品详情页（标本铭牌）：展示商品信息、多平台采集点比价与历史价格图谱。
+ * 同时支持本地库商品（/product/:id）与慢慢买实时商品（/product/live）两种模式，
+ * 实时商品在追踪/比价/导购前才按需收录入库。
+ */
 <template>
   <div class="page" v-loading="loading" ref="pageRef">
     <template v-if="product">
@@ -72,6 +77,7 @@
               <span class="sk-line sk-price"></span>
             </div>
           </template>
+          <!-- 采集点行循环：比价条按最高价归一化，最低价盖"史低"印章 -->
           <div class="site-row" v-for="row in product.listings" :key="row.id">
             <span class="site-plat"><el-tag size="small">{{ platformName(row.platform) }}</el-tag></span>
             <span class="site-title" :title="row.title">{{ row.title }}</span>
@@ -121,6 +127,7 @@
       </div>
     </template>
 
+    <!-- 加入价格追踪弹窗：设置目标价，达价后推送降价提醒 -->
     <el-dialog v-model="trackDialog" title="加入价格追踪" width="420px">
       <div style="margin-bottom: 12px" class="muted">
         设置目标价后，当「{{ product?.name }}」价格达到目标价时系统会向你推送降价提醒。
@@ -148,6 +155,7 @@ const router = useRouter()
 // 实时模式（/product/live）：商品信息即查即看，全部数据实时来自慢慢买，追踪/比价时才入库
 const isLive = route.params.id === 'live'
 const id = isLive ? 0 : Number(route.params.id)
+// 从路由 query 携带的实时商品卡片信息（先渲染铭牌，历史价后台再采集）
 const liveQuery = {
   url: String(route.query.url || ''),
   title: String(route.query.title || ''),
@@ -157,19 +165,29 @@ const liveQuery = {
   deal: String(route.query.deal || '') === '1',
 }
 const liveData = ref<any>(null) // 慢慢买实时返回（含全量 history）
+// 实时采集进行中：驱动采集点/图谱骨架占位
 const liveLoading = ref(false)
+// 实时商品按需入库后的本地商品 id（缓存避免重复导入）
 const importedId = ref<number | null>(null)
+// 商品缺图时的兜底占位图
 const placeholder =
   'https://trae-api-cn.mchost.guru/api/ide/v1/text_to_image?prompt=minimal%20white%20product%20placeholder%20shopping%20bag%20flat%20design&image_size=square'
 
+// 页面主加载态（本地库模式整页加载）
 const loading = ref(false)
+// 商品详情（含多平台采集点 listings）
 const product = ref<any>(null)
+// 价格趋势数据：统计值 + 每日数据点
 const trend = ref<any>(null)
+// 趋势时间窗口（天）：切换即重新加载图谱
 const days = ref(180)
 
+// 加入追踪弹窗可见性
 const trackDialog = ref(false)
 const askQuestion = ref('')  // AI 导购快捷提问
+// 追踪目标价：价格达到该值时推送降价提醒
 const targetPrice = ref<number | undefined>(undefined)
+// 追踪提交按钮加载态
 const trackLoading = ref(false)
 
 // —— 标本手记动效 ——
@@ -186,6 +204,7 @@ const collectedAt = computed(() => {
   const pts = trend.value?.points
   return Array.isArray(pts) && pts.length ? pts[0].date : ''
 })
+// 距史低的入手建议文案（已抵史低 / 距史低差额）
 const gapNote = computed(() => {
   const t = trend.value
   if (!t || t.min_price == null) return ''
@@ -194,27 +213,32 @@ const gapNote = computed(() => {
   const diff = Math.round((cur - t.min_price) * 100) / 100
   return diff <= 0 ? '已抵史低，正是入手时机' : `距史低 ￥${diff}，可观望，亦可入手`
 })
+// 采集点最高价：用于归一化比价条宽度
 const maxListingPrice = computed(() => {
   const ls = product.value?.listings || []
   return ls.reduce((m: number, r: any) => Math.max(m, r.current_price || 0), 0)
 })
+// 比价条宽度 = 该采集点价格占最高价的比例（最低 6% 保证可见）
 function barWidth(row: any) {
   const max = maxListingPrice.value
   if (!max || row.current_price == null) return '0%'
   return Math.max(6, Math.round((row.current_price / max) * 100)) + '%'
 }
+// 判断该采集点是否为全平台最低价（决定是否盖"史低"印章）
 function isLowest(row: any) {
   const ls = product.value?.listings || []
   if (!ls.length || row.current_price == null) return false
   return row.current_price === Math.min(...ls.map((r: any) => r.current_price ?? Infinity))
 }
 
+// 平台编码 -> 中文名映射（采集点标签展示用）
 const names: Record<string, string> = {
   jd: '京东', taobao: '淘宝', manmanbuy: '慢慢买', dangdang: '当当',
   suning: '苏宁', pdd: '拼多多', vip: '唯品会', web: '其他',
 }
 const platformName = (p: string) => names[p] || p
 
+/** 本地库模式：并行拉取商品详情与价格趋势 */
 async function load() {
   loading.value = true
   try {
@@ -230,6 +254,7 @@ async function load() {
     loading.value = false
   }
 }
+/** 切换时间窗口后重载趋势：实时模式在客户端按窗口裁剪重算，本地库模式请求接口 */
 async function loadTrend() {
   if (isLive) {
     applyLiveTrend()
@@ -254,6 +279,7 @@ function seedLiveProduct() {
   }
 }
 
+/** 实时模式：按当前时间窗口裁剪全量历史价，客户端计算最低/最高/均价等统计 */
 function applyLiveTrend() {
   const d = liveData.value
   if (!d) return
@@ -273,6 +299,7 @@ function applyLiveTrend() {
   }
 }
 
+/** 实时模式：请求慢慢买实时查询，回填铭牌/采集点信息并计算价格趋势 */
 async function loadLive() {
   liveLoading.value = true
   try {
@@ -332,6 +359,7 @@ async function ensureImported(): Promise<number> {
     msg.close()
   }
 }
+/** 提交加入追踪：实时商品先按需入库拿到本地 id，再创建追踪（可带目标价） */
 async function addTracking() {
   trackLoading.value = true
   try {
@@ -387,6 +415,7 @@ onMounted(async () => {
   }
 })
 
+// 卸载时清理本页的 ScrollTrigger，避免动效监听泄漏到其他页面
 onUnmounted(() => {
   const root = pageRef.value
   if (!root) return

@@ -21,13 +21,15 @@ def check_price_alerts(db: Session) -> int:
     created = 0
     today = datetime.now().date()
     for tracking, product, user in rows:
+        # 取该商品各平台报价的当前最低价与目标价比对
         price = (
             db.query(func.min(Listing.current_price))
             .filter(Listing.product_id == product.id)
             .scalar()
         )
         if price is None or price > tracking.target_price:
-            continue
+            continue  # 无报价或未达目标价 -> 跳过
+        # 同一用户同一商品当天只提醒一次，避免反复达标造成消息轰炸
         already = (
             db.query(Alert)
             .filter(
@@ -43,6 +45,7 @@ def check_price_alerts(db: Session) -> int:
             f"降价提醒：「{product.name}」当前价 {price:.2f} 元，"
             f"已达到你设置的目标价 {tracking.target_price:.2f} 元"
         )
+        # 写入站内消息（Alert 表），随后同步投递模拟邮箱邮件
         db.add(
             Alert(
                 user_id=user.id,
@@ -66,5 +69,5 @@ def check_price_alerts(db: Session) -> int:
         )
         created += 1
     if created:
-        db.commit()
+        db.commit()  # 有新增提醒才提交事务
     return created

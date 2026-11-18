@@ -19,16 +19,19 @@ from conftest import auth_headers, make_listing, make_product, make_snapshot, ma
 # ================= moderation 敏感词过滤 =================
 
 def _add_word(db, word, category="通用", enabled=True):
+    """辅助函数：向敏感词表插入一个词条（可指定分类与启用状态）"""
     db.add(SensitiveWord(word=word, category=category, enabled=enabled))
     db.commit()
 
 
 def test_find_sensitive_empty_text(db):
+    """【边界】空文本/None 文本不命中任何敏感词"""
     assert moderation.find_sensitive("", db) == []
     assert moderation.find_sensitive(None, db) == []
 
 
 def test_find_sensitive_hit_case_insensitive(db):
+    """【正常流】敏感词命中支持大小写不敏感的子串匹配"""
     _add_word(db, "赌博")
     _add_word(db, "Scam")
     hits = moderation.find_sensitive("参与赌博 and SCAM activity", db)
@@ -36,11 +39,13 @@ def test_find_sensitive_hit_case_insensitive(db):
 
 
 def test_find_sensitive_no_hit(db):
+    """【边界】正常文本不命中敏感词"""
     _add_word(db, "赌博")
     assert moderation.find_sensitive("正常购物咨询", db) == []
 
 
 def test_find_sensitive_skips_blank_and_disabled_words(db):
+    """【边界】空白词条与停用词条不参与匹配"""
     # 启用过滤 + strip 后为空的词跳过
     _add_word(db, "  ", enabled=True)
     _add_word(db, "违禁词", enabled=False)
@@ -48,6 +53,7 @@ def test_find_sensitive_skips_blank_and_disabled_words(db):
 
 
 def test_get_words_cache_and_invalidate(db):
+    """敏感词列表缓存命中不刷新，invalidate_cache 后立即生效"""
     _add_word(db, "词A")
     w1 = moderation.get_words(db)
     assert w1 == ["词A"]
@@ -63,10 +69,12 @@ def test_get_words_cache_and_invalidate(db):
 # ================= 聊天接口：敏感词与模型配置 =================
 
 def _client_user(db):
+    """辅助函数：创建聊天接口测试用的普通用户"""
     return make_user(db, username="ai_user", email="ai@qq.com")
 
 
 def test_check_text_blocked(client, db):
+    """【正常流】文本检测命中敏感词时返回拦截标记与命中词"""
     _add_word(db, "赌博")
     u = _client_user(db)
     r = client.post("/api/advisor/check", json={"text": "帮我赌博下注"}, headers=auth_headers(u))
@@ -75,6 +83,7 @@ def test_check_text_blocked(client, db):
 
 
 def test_check_text_pass(client, db):
+    """【正常流】文本检测未命中敏感词时放行"""
     _add_word(db, "赌博")
     u = _client_user(db)
     r = client.post("/api/advisor/check", json={"text": "推荐个手机"}, headers=auth_headers(u))
@@ -83,11 +92,13 @@ def test_check_text_pass(client, db):
 
 
 def test_check_text_requires_login(client, db):
+    """【异常流】未登录调用文本检测返回 401"""
     r = client.post("/api/advisor/check", json={"text": "hi"})
     assert r.status_code == 401
 
 
 def test_chat_input_sensitive_blocked_without_llm(client, db, monkeypatch):
+    """【异常流】输入含敏感词时直接拦截，不调用大模型"""
     _add_word(db, "赌博")
     monkeypatch.setattr(ai_advisor, "llm_chat",
                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("不应调用大模型")))
@@ -104,6 +115,7 @@ import json as _json
 
 
 def _parse_sse(text):
+    """辅助函数：解析 SSE 文本，提取 data: 行为 JSON 事件列表"""
     events = []
     for part in text.split("\n\n"):
         part = part.strip()
@@ -113,10 +125,12 @@ def _parse_sse(text):
 
 
 def _deltas_text(events):
+    """辅助函数：拼接所有 delta 事件的文本，得到流式输出全文"""
     return "".join(e.get("text", "") for e in events if e.get("type") == "delta")
 
 
 def test_chat_stream_normal(client, db, monkeypatch):
+    """【正常流】流式聊天正常返回增量文本并以 done 事件收尾"""
     monkeypatch.setattr(ai_advisor, "llm_chat_stream", lambda *a, **k: iter(["你好，", "建议购买"]))
     u = _client_user(db)
     r = client.post("/api/advisor/chat/stream", json={"message": "值得买吗"}, headers=auth_headers(u))
@@ -126,6 +140,7 @@ def test_chat_stream_normal(client, db, monkeypatch):
 
 
 def test_chat_stream_input_sensitive_json_error(client, db):
+    """【异常流】流式聊天输入含敏感词时返回 JSON 错误"""
     _add_word(db, "赌博")
     u = _client_user(db)
     r = client.post("/api/advisor/chat/stream", json={"message": "帮我赌博"}, headers=auth_headers(u))
@@ -134,6 +149,7 @@ def test_chat_stream_input_sensitive_json_error(client, db):
 
 
 def test_chat_stream_output_blocked_across_chunks(client, db, monkeypatch):
+    """【异常流】输出敏感词跨 chunk 时被回看窗口拦截"""
     # 敏感词跨 chunk（"介绍枪" + "支商品"）：回看窗口拦截，输出中不含完整敏感词
     _add_word(db, "枪支")
     monkeypatch.setattr(ai_advisor, "llm_chat_stream", lambda *a, **k: iter(["介绍枪", "支商品给你"]))
@@ -146,6 +162,7 @@ def test_chat_stream_output_blocked_across_chunks(client, db, monkeypatch):
 
 
 def test_chat_stream_midstream_error_keeps_partial(client, db, monkeypatch):
+    """【异常流】流式中途出错时保留已生成内容并发送 error 事件"""
     def gen():
         yield "前半段"
         raise RuntimeError("连接中断")
@@ -159,6 +176,7 @@ def test_chat_stream_midstream_error_keeps_partial(client, db, monkeypatch):
 
 
 def test_chat_stream_fallback_summary_with_context(client, db, monkeypatch):
+    """【降级】大模型失败且带商品上下文时返回兜底数据摘要"""
     monkeypatch.setattr(ai_advisor, "llm_chat_stream",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("接口失败")))
     p = make_product(db, name="流式手机", category="手机")
@@ -172,6 +190,7 @@ def test_chat_stream_fallback_summary_with_context(client, db, monkeypatch):
 
 
 def test_chat_stream_fallback_no_context_custom_model(client, db, monkeypatch):
+    """【降级】自定义模型失败且无上下文时返回自定义模型降级提示"""
     monkeypatch.setattr(ai_advisor, "llm_chat_stream",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("接口失败")))
     u = _client_user(db)
@@ -184,6 +203,7 @@ def test_chat_stream_fallback_no_context_custom_model(client, db, monkeypatch):
 
 
 def test_chat_stream_images_retry_text_only(client, db, monkeypatch):
+    """【降级】多模态调用失败后以纯文本重试成功，附注图片未解析"""
     # 多模态失败 -> 纯文本重试成功，附注图片未解析
     calls = []
 
@@ -205,6 +225,7 @@ def test_chat_stream_images_retry_text_only(client, db, monkeypatch):
 
 
 def test_chat_stream_config_incomplete(client, db):
+    """【异常流】流式聊天自定义模型配置不完整时返回错误"""
     u = _client_user(db)
     r = client.post("/api/advisor/chat/stream",
                     json={"message": "hi", "ai_config": {"api_base": "", "api_key": "k", "model": "m"}},
@@ -214,6 +235,7 @@ def test_chat_stream_config_incomplete(client, db):
 
 
 def test_chat_ai_config_incomplete(client, db, monkeypatch):
+    """【异常流】非流式聊天配置缺 api_key 或 api_base 时拒绝且不调大模型"""
     monkeypatch.setattr(ai_advisor, "llm_chat",
                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("不应调用大模型")))
     u = _client_user(db)
@@ -225,6 +247,7 @@ def test_chat_ai_config_incomplete(client, db, monkeypatch):
 
 
 def test_chat_ai_config_complete_ok(client, db, monkeypatch):
+    """【正常流】完整自定义模型配置透传给大模型调用并正常回复"""
     seen = {}
 
     def fake_llm(messages, temperature=0.5, timeout=60, json_mode=False, ai_config=None):
@@ -242,6 +265,7 @@ def test_chat_ai_config_complete_ok(client, db, monkeypatch):
 
 
 def test_chat_output_sensitive_blocked(client, db, monkeypatch):
+    """【异常流】大模型输出含敏感词时返回统一拦截话术"""
     _add_word(db, "枪支")
     monkeypatch.setattr(ai_advisor, "llm_chat", lambda *a, **k: "这里有枪支出售信息")
     u = _client_user(db)
@@ -253,6 +277,7 @@ def test_chat_output_sensitive_blocked(client, db, monkeypatch):
 
 
 def test_chat_ok_default_model(client, db, monkeypatch):
+    """【正常流】默认模型聊天正常返回回复内容"""
     monkeypatch.setattr(ai_advisor, "llm_chat", lambda *a, **k: "建议立即购买")
     u = _client_user(db)
     r = client.post("/api/advisor/chat", json={"message": "值得买吗"}, headers=auth_headers(u))
@@ -263,6 +288,7 @@ def test_chat_ok_default_model(client, db, monkeypatch):
 # ================= chat_reply 上下文组装 =================
 
 def _fake_llm_capture(calls):
+    """辅助函数：返回记录 messages 入参并固定回复的大模型替身"""
     def fake(messages, temperature=0.5, timeout=60, json_mode=False, ai_config=None):
         calls.append(messages)
         return "好的回复"
@@ -270,6 +296,7 @@ def _fake_llm_capture(calls):
 
 
 def _product_with_history(db):
+    """辅助函数：构造含多平台报价与 15 天历史快照的测试商品"""
     p = make_product(db, name="上下文手机", category="手机")
     l = make_listing(db, p, current_price=1000.0)
     make_listing(db, p, platform="taobao", url="https://t/ctx", current_price=1200.0)  # 多平台报价
@@ -281,6 +308,7 @@ def _product_with_history(db):
 
 
 def test_chat_reply_product_tag(db, monkeypatch):
+    """【正常流】商品标记生成含价格/趋势/多平台报价的上下文并替换为展示名"""
     p = _product_with_history(db)
     calls = []
     monkeypatch.setattr(ai_advisor, "llm_chat", _fake_llm_capture(calls))
@@ -294,6 +322,7 @@ def test_chat_reply_product_tag(db, monkeypatch):
 
 
 def test_chat_reply_product_tag_single_offer(db, monkeypatch):
+    """【边界】单报价商品的上下文不输出多平台报价行"""
     # 单报价商品 -> 不输出多平台报价行的分支
     p = make_product(db, name="单报价手机", category="手机")
     make_listing(db, p, current_price=500.0)
@@ -304,6 +333,7 @@ def test_chat_reply_product_tag_single_offer(db, monkeypatch):
 
 
 def test_chat_reply_product_tag_invalid(db, monkeypatch):
+    """【边界】不存在的商品标记不产生上下文，原文经标签隔离保留"""
     # 不存在的商品标记 -> brief 为空 -> 不产生上下文、保留原文
     calls = []
     monkeypatch.setattr(ai_advisor, "llm_chat", _fake_llm_capture(calls))
@@ -315,6 +345,7 @@ def test_chat_reply_product_tag_invalid(db, monkeypatch):
 
 
 def test_chat_reply_link_ok(db, monkeypatch):
+    """【正常流】消息中的商品链接被抓取并生成含历史最低价的上下文"""
     monkeypatch.setattr("app.services.crawler.manmanbuy.query_history",
                         lambda url, timeout_ms=0: {
                             "title": "链接商品", "site_name": "京东", "price": 99.0,
@@ -327,6 +358,7 @@ def test_chat_reply_link_ok(db, monkeypatch):
 
 
 def test_chat_reply_link_no_history(db, monkeypatch):
+    """【边界】链接抓取成功但无历史价时不输出历史最低价"""
     # 链接抓取成功但无历史价格 -> _link_brief 的空历史分支
     monkeypatch.setattr("app.services.crawler.manmanbuy.query_history",
                         lambda url, timeout_ms=0: {
@@ -340,6 +372,7 @@ def test_chat_reply_link_no_history(db, monkeypatch):
 
 
 def test_chat_reply_link_fail(db, monkeypatch):
+    """【异常流】链接抓取失败时上下文提示抓取失败"""
     def boom(url, timeout_ms=0):
         raise RuntimeError("抓取超时")
 
@@ -351,6 +384,7 @@ def test_chat_reply_link_fail(db, monkeypatch):
 
 
 def test_chat_reply_routed_product_missing(db, monkeypatch):
+    """【边界】路由商品不存在时不产生上下文"""
     # 路由商品不存在 -> brief 为空 -> 不产生上下文的分支
     calls = []
     monkeypatch.setattr(ai_advisor, "llm_chat", _fake_llm_capture(calls))
@@ -359,6 +393,7 @@ def test_chat_reply_routed_product_missing(db, monkeypatch):
 
 
 def test_chat_reply_url_appended_when_missing_from_display(db, monkeypatch):
+    """【边界】URL 不在展示内容中时补注到上下文的防御性分支"""
     # 防御性分支：URL 不在展示内容中时补注到上下文（L224）。
     # 正常流程 display 始终包含 URL，此处将商品标记正则替换为会连同 URL 一并
     # 匹配的变体，使 URL 被 sub 移除，从而强制覆盖该分支。
@@ -374,6 +409,7 @@ def test_chat_reply_url_appended_when_missing_from_display(db, monkeypatch):
 
 
 def test_chat_reply_routed_product_and_history_filter(db, monkeypatch):
+    """【正常流】路由商品上下文注入 system 消息且历史记录过滤非法条目"""
     p = _product_with_history(db)
     calls = []
     monkeypatch.setattr(ai_advisor, "llm_chat", _fake_llm_capture(calls))
@@ -388,6 +424,7 @@ def test_chat_reply_routed_product_and_history_filter(db, monkeypatch):
 
 
 def test_chat_reply_images_and_files(db, monkeypatch):
+    """【正常流】图片与文件组装为多模态消息，图片数截断到上限"""
     calls = []
     monkeypatch.setattr(ai_advisor, "llm_chat", _fake_llm_capture(calls))
     out = ai_advisor.chat_reply(
@@ -405,6 +442,7 @@ def test_chat_reply_images_and_files(db, monkeypatch):
 
 
 def test_chat_reply_no_images_text_message(db, monkeypatch):
+    """【边界】无图片时用户消息为纯文本并经标签隔离"""
     calls = []
     monkeypatch.setattr(ai_advisor, "llm_chat", _fake_llm_capture(calls))
     ai_advisor.chat_reply(db, "纯文本问题", [])
@@ -415,6 +453,7 @@ def test_chat_reply_no_images_text_message(db, monkeypatch):
 # ================= 降级链 =================
 
 def test_fallback_images_retry_text_ok(db, monkeypatch):
+    """【降级】多模态失败后纯文本重试成功并附注图片未解析"""
     seq = [RuntimeError("视觉接口失败"), "文字回复"]
     monkeypatch.setattr(ai_advisor, "llm_chat", lambda *a, **k: _pop(seq))
     out = ai_advisor.chat_reply(db, "看图", [], images=["data:image/png;base64,xx"])
@@ -423,6 +462,7 @@ def test_fallback_images_retry_text_ok(db, monkeypatch):
 
 
 def test_fallback_images_retry_also_fails_with_context(db, monkeypatch):
+    """【降级】多模态与纯文本重试均失败时返回已获取数据摘要"""
     def boom(*a, **k):
         raise RuntimeError("全部失败")
 
@@ -433,6 +473,7 @@ def test_fallback_images_retry_also_fails_with_context(db, monkeypatch):
 
 
 def test_fallback_no_images_with_context(db, monkeypatch):
+    """【降级】大模型失败且带商品上下文时返回数据摘要兜底"""
     def boom(*a, **k):
         raise RuntimeError("接口失败")
 
@@ -443,6 +484,7 @@ def test_fallback_no_images_with_context(db, monkeypatch):
 
 
 def test_fallback_no_context_default_model(db, monkeypatch):
+    """【降级】默认模型失败且无上下文时返回通用失败提示"""
     def boom(*a, **k):
         raise RuntimeError("接口失败")
 
@@ -453,6 +495,7 @@ def test_fallback_no_context_default_model(db, monkeypatch):
 
 
 def test_fallback_no_context_custom_model(db, monkeypatch):
+    """【降级】自定义模型失败且无上下文时返回专属失败提示"""
     def boom(*a, **k):
         raise RuntimeError("接口失败")
 
@@ -463,6 +506,7 @@ def test_fallback_no_context_custom_model(db, monkeypatch):
 
 
 def _pop(seq):
+    """辅助函数：按序弹出替身返回值，弹出的是异常则抛出，用于模拟多阶段调用"""
     v = seq.pop(0)
     if isinstance(v, Exception):
         raise v
@@ -472,6 +516,8 @@ def _pop(seq):
 # ================= llm_chat 调用封装 =================
 
 class _Resp:
+    """模拟 httpx 响应对象：支持 raise_for_status 与 OpenAI 兼容的 json 结构"""
+
     def __init__(self, content):
         self._content = content
 
@@ -483,6 +529,7 @@ class _Resp:
 
 
 def test_llm_chat_custom_config_overrides(monkeypatch):
+    """【正常流】自定义模型配置覆盖默认配置，请求参数拼装正确"""
     seen = {}
 
     def fake_post(url, json=None, headers=None, timeout=None):
@@ -504,6 +551,7 @@ def test_llm_chat_custom_config_overrides(monkeypatch):
 
 
 def test_llm_chat_default_config_and_json_mode(monkeypatch):
+    """【正常流】默认配置发起请求，json_mode 附加 response_format 参数"""
     seen = {}
 
     def fake_post(url, json=None, headers=None, timeout=None):
@@ -522,6 +570,7 @@ def test_llm_chat_default_config_and_json_mode(monkeypatch):
 
 
 def test_llm_chat_missing_key_raises(monkeypatch):
+    """【异常流】缺少 API Key 或 API Base 时调用直接抛错"""
     monkeypatch.setattr(ai_advisor, "LLM_API_BASE", "")
     monkeypatch.setattr(ai_advisor, "LLM_API_KEY", "")
     with pytest.raises(RuntimeError, match="LLM_API_KEY"):
@@ -535,11 +584,13 @@ def test_llm_chat_missing_key_raises(monkeypatch):
 # ================= build_context =================
 
 def test_build_context_missing_product(db):
+    """【异常流】构建上下文时商品不存在抛 ValueError"""
     with pytest.raises(ValueError):
         ai_advisor.build_context(db, 99999)
 
 
 def test_build_context_rising_trend(db):
+    """【正常流】近 7 天与前 7 天涨幅不足 2% 时趋势判定为平稳"""
     p = _product_with_history(db)  # 15 天：1000..1014，近 7 天高于前 7 天不足 2% -> 平稳
     ctx = ai_advisor.build_context(db, p.id)
     assert ctx["trend"] == "平稳" and ctx["percentile"] is not None
@@ -547,6 +598,7 @@ def test_build_context_rising_trend(db):
 
 
 def test_build_context_sharp_rise_and_fall(db):
+    """覆盖趋势判定的上涨/下降两个分支（涨跌幅超过 2%）"""
     # 上涨 > 2%
     p1 = make_product(db, name="上涨商品", category="数码")
     l1 = make_listing(db, p1, current_price=0.0)  # 无有效报价 -> current 取最后快照价
@@ -564,6 +616,7 @@ def test_build_context_sharp_rise_and_fall(db):
 
 
 def test_build_context_prev_avg_zero_and_empty_history(db):
+    """【边界】前段均价为 0 时判平稳，无任何快照时统计字段全为 null"""
     # p > 0 条件为假 -> 平稳；无任何快照 -> 统计全 None
     p1 = make_product(db, name="零价序列", category="数码")
     l1 = make_listing(db, p1, current_price=0.0)
@@ -579,11 +632,13 @@ def test_build_context_prev_avg_zero_and_empty_history(db):
 # ================= 文件上传 =================
 
 def test_upload_requires_login(client, db):
+    """【异常流】未登录上传文件返回 401"""
     r = client.post("/api/advisor/upload", files={"file": ("a.txt", b"x")})
     assert r.status_code == 401
 
 
 def test_upload_sanitizes_filename(client, db):
+    """【正常流】上传文件名被安全化处理，原始名称保留在返回值中"""
     u = make_user(db, username="up1", email="up1@qq.com")
     r = client.post("/api/advisor/upload",
                     files={"file": ("测试 file!.txt", io.BytesIO(b"hello"))},
@@ -595,6 +650,7 @@ def test_upload_sanitizes_filename(client, db):
 
 
 def test_upload_filename_none_fallback(db):
+    """【边界】文件名缺省时安全名回退为 file"""
     # filename 缺省 -> 安全名回退为 file
     from app.routers.ai import upload_file
 

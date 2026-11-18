@@ -1,3 +1,7 @@
+"""用户管理路由：注册、登录、个人信息维护、订阅查询与用户画像
+
+换绑邮箱/修改密码通过模拟邮箱验证码校验，敏感操作向绑定邮箱投递通知。
+"""
 import re
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -13,6 +17,7 @@ from ..services.mailer import check_verification_code, send_mail
 
 router = APIRouter(prefix="/api/auth", tags=["用户管理"])
 
+# 邮箱基本格式校验（本地部分@域名）
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
@@ -21,6 +26,7 @@ def register(body: RegisterIn, db: Session = Depends(get_db)):
     """REQ-SPT-101 用户注册：用户名 3~20 位且唯一，密码 >=8 位含字母数字，邮箱格式校验"""
     if not re.match(r"^[A-Za-z0-9_]{3,20}$", body.username):
         raise HTTPException(400, "用户名须为 3~20 位字母、数字或下划线")
+    # 密码强度：须同时包含字母与数字（长度下限由 schema 校验）
     if not (re.search(r"[A-Za-z]", body.password) and re.search(r"\d", body.password)):
         raise HTTPException(400, "密码不少于 8 位且须同时包含字母与数字")
     if not EMAIL_RE.match(body.email):
@@ -66,6 +72,7 @@ def login(body: LoginIn, db: Session = Depends(get_db)):
 
 @router.get("/me")
 def me(user: User = Depends(get_current_user)):
+    """获取当前登录用户的基本信息"""
     return UserOut.model_validate(user).model_dump(mode="json")
 
 
@@ -81,10 +88,12 @@ def update_profile(
     if body.email is not None and body.email != user.email:
         if db.query(User).filter(User.email == body.email).first():
             raise HTTPException(400, "该邮箱已被注册")
+        # 换绑邮箱需向新邮箱发送验证码校验
         if not check_verification_code(db, body.email, "email_change", body.email_code):
             raise HTTPException(400, "新邮箱验证码错误或已过期，请先获取验证码")
         old_email = user.email
         user.email = body.email
+        # 模拟邮箱：向旧邮箱投递换绑安全通知
         send_mail(
             db,
             to_email=old_email,
@@ -96,6 +105,7 @@ def update_profile(
     if body.password:
         if not (re.search(r"[A-Za-z]", body.password) and re.search(r"\d", body.password)) or len(body.password) < 8:
             raise HTTPException(400, "密码不少于 8 位且须同时包含字母与数字")
+        # 修改密码需向当前绑定邮箱发验证码校验
         if not check_verification_code(db, user.email, "password_change", body.password_code):
             raise HTTPException(400, "密码修改验证码错误或已过期，请先获取验证码")
         user.password_hash = hash_password(body.password)

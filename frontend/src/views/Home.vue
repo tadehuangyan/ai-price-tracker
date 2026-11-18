@@ -1,3 +1,8 @@
+/**
+ * 首页（标本展位）：全网商品实时比价检索与浏览入口。
+ * 支持关键词搜索、粘贴商品链接直达详情、上传图片识图找同款，
+ * 并提供分类筛选、排序与客户端分页，点击商品卡片进入实时详情页。
+ */
 <template>
   <div class="page" ref="pageRef">
     <!-- 页头 -->
@@ -81,6 +86,7 @@
       </div>
     </div>
 
+    <!-- 商品卡片网格：循环渲染当前页标本，点击卡片进入实时详情 -->
     <div v-else v-loading="loading" element-loading-text="标本采集中" class="grid" ref="gridRef">
       <div
         v-for="(p, i) in displayItems"
@@ -128,6 +134,7 @@
       <template v-else-if="visionResult">
         <div class="kicker"><span class="pin-dot"></span>识别结果<span v-if="visionResult.keywords">：{{ visionResult.keywords }}</span></div>
         <p v-if="visionResult.message" class="muted">{{ visionResult.message }}</p>
+        <!-- 候选商品列表：点击任一项跳转对应详情页（本地库 / 联网实时） -->
         <div class="vision-list">
           <div
             v-for="(c, i) in visionResult.candidates"
@@ -165,16 +172,24 @@ import api, { errMsg } from '../api'
 import { splitReveal, revealOnScroll, refreshScroll, countUp, magnetic, tiltCard, pinPress } from '../anim'
 
 const router = useRouter()
+// 商品缺图时的兜底占位图
 const placeholder =
   'https://trae-api-cn.mchost.guru/api/ide/v1/text_to_image?prompt=minimal%20white%20product%20placeholder%20icon%20shopping%20bag%20flat%20design&image_size=square'
 
+// 搜索输入框内容：支持商品关键词或商品链接（链接直达详情）
 const keyword = ref('')
+// 当前分类编码，空串表示"全部"
 const category = ref('')
+// 排序方式：random / price_asc / price_desc / newest
 const sort = ref('random')
+// 当前页码（客户端分页，数据一次性取回）
 const page = ref(1)
 const pageSize = 12
+// 慢慢买实时检索到的全量商品，排序与分页均在客户端完成
 const allItems = ref<any[]>([])
+// 分类索引列表（供分类筛选单选组使用）
 const categories = ref<any[]>([])
+// 检索加载态：首次加载时用骨架卡遮盖实时爬取的空白期
 const loading = ref(false)
 
 // —— 标本手记动效 ——
@@ -197,6 +212,7 @@ const total = computed(() => allItems.value.length)
 function lotNo(i: number) {
   return String((page.value - 1) * pageSize + i + 1).padStart(3, '0')
 }
+// 拼接标本注记：标签 / 平台 / 时间，缺项则用默认观测语
 function specimenNote(p: any) {
   const bits = [p.tag, p.platform, p.time].filter(Boolean)
   return bits.length ? bits.join(' · ') : '全网采集 · 持续观测'
@@ -267,6 +283,7 @@ async function loadCategories() {
 }
 
 // —— 识图找同款（与 AI 导购页同款能力：视觉识别 -> 候选 -> 查看详情） ——
+// 识图返回的候选商品：product_id 非空为本地库商品，否则为联网实时结果
 interface VisionCandidate {
   product_id: number | null
   name: string
@@ -276,15 +293,20 @@ interface VisionCandidate {
   url?: string
   source: string
 }
+// 隐藏的文件选择框：识图上传图片的入口
 const visInput = ref<HTMLInputElement>()
+// 识图结果弹窗的可见性
 const visionVisible = ref(false)
+// 识图请求进行中（弹窗内展示识别动效）
 const visionLoading = ref(false)
+// 识图结果：识别关键词 + 候选商品列表
 const visionResult = ref<{ keywords: string; message?: string; candidates: VisionCandidate[] } | null>(null)
 
 function pickVisionImage() {
   visInput.value?.click()
 }
 
+// 将图片文件读为 base64 DataURL，便于随请求体传给识图接口
 function readDataURL(f: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
@@ -294,6 +316,10 @@ function readDataURL(f: File): Promise<string> {
   })
 }
 
+/**
+ * 处理识图图片选择：读取图片为 DataURL 并调用识图接口，
+ * 成功后在弹窗中展示识别关键词与候选商品，失败则提示并关闭弹窗。
+ */
 async function onVisPick(e: Event) {
   const el = e.target as HTMLInputElement
   const files = Array.from(el.files || []).slice(0, 2)
@@ -362,6 +388,7 @@ onMounted(() => {
   loadCategories()
 })
 
+// 页面卸载时清理本页的 ScrollTrigger，避免动效监听泄漏到其他页面
 onUnmounted(() => {
   const root = pageRef.value
   if (!root) return

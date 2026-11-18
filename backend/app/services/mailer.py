@@ -57,6 +57,7 @@ def send_mail(
 
 def send_verification_code(db: Session, email: str, purpose: str, user_id: int = None):
     """生成 6 位验证码并模拟投递。返回 (ok, message, code)"""
+    # 频率限制：同邮箱同用途 60 秒内只允许重发一次（查最近一条发送记录）
     last = (
         db.query(MailMessage)
         .filter(
@@ -70,7 +71,7 @@ def send_verification_code(db: Session, email: str, purpose: str, user_id: int =
     if last and last.created_at and (datetime.now() - last.created_at).total_seconds() < RESEND_INTERVAL_SECONDS:
         return False, "发送过于频繁，请 60 秒后再试", ""
 
-    code = f"{random.randint(0, 999999):06d}"
+    code = f"{random.randint(0, 999999):06d}"  # 6 位数字验证码（左补零）
     name = PURPOSE_NAMES.get(purpose, purpose)
     send_mail(
         db,
@@ -94,6 +95,7 @@ def check_verification_code(db: Session, email: str, purpose: str, code: str, co
     """校验验证码：最新一条匹配、未使用、在有效期内则通过；consume=True 时作废（由调用方 commit）"""
     if not code:
         return False
+    # 有效期内的匹配记录：邮箱 + 用途 + 验证码 + 未使用，取最新一条
     since = datetime.now() - timedelta(seconds=CODE_TTL_SECONDS)
     mail = (
         db.query(MailMessage)
@@ -116,6 +118,7 @@ def check_verification_code(db: Session, email: str, purpose: str, code: str, co
 
 
 def mail_to_dict(m: MailMessage) -> dict:
+    """邮件记录 -> API/前端展示用 dict（含分类中文名、验证码使用状态）"""
     return {
         "id": m.id,
         "to_email": m.to_email,

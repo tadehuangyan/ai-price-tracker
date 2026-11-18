@@ -1,3 +1,7 @@
+"""AI 智能导购路由：对话（同步/SSE 流式）、发送前内容预检、文件上传与识图找同款
+
+对外调用大模型前做敏感词与提示注入过滤，输出同样做敏感内容拦截。
+"""
 from fastapi import APIRouter, Depends, File, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -15,6 +19,7 @@ from ..services.moderation import find_injection, find_sensitive
 
 router = APIRouter(prefix="/api/advisor", tags=["AI 智能导购"])
 
+# 输出被拦截时替换的统一话术
 BLOCKED_REPLY = "AI 回复包含敏感内容，已被拦截，请重新提问。"
 
 
@@ -30,6 +35,7 @@ def _check_input(text: str, db) -> str:
 
 
 class ChatIn(BaseModel):
+    """聊天入参：消息、上下文、当前商品、图片/文件与可选的自定义模型配置"""
     message: str = Field(min_length=1, max_length=4000)
     history: list = []  # [{role, content}] 最近对话上下文
     product_id: int | None = None  # 路由带入的当前浏览商品
@@ -39,10 +45,12 @@ class ChatIn(BaseModel):
 
 
 class CheckIn(BaseModel):
+    """发送前预检入参：待检查的文本"""
     text: str = Field(default="", max_length=4000)
 
 
 class ImageSearchIn(BaseModel):
+    """识图找同款入参：1~4 张图片（dataURI）与可选的自定义模型配置"""
     images: list = Field(min_length=1, max_length=4)  # [dataURI]
     ai_config: dict | None = None
 
@@ -98,6 +106,7 @@ def chat_stream(body: ChatIn, db: Session = Depends(get_db), user: User = Depend
             db, body.message, body.history, body.product_id,
             images=body.images, files=body.files, ai_config=ai_config, user=user,
         ):
+            # 流式输出命中敏感词时，事件统一改写为 blocked 提示
             if ev.get("type") == "blocked":
                 ev = {"type": "blocked", "reply": BLOCKED_REPLY}
             yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
@@ -120,6 +129,7 @@ def upload_file(
     import time
 
     safe = _re.sub(r"[^\w.\-\u4e00-\u9fff]", "_", file.filename or "file")
+    # 时间戳前缀避免不同用户上传同名文件互相覆盖
     fname = f"{int(time.time())}_{safe}"
     base = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     updir = os.path.join(base, "storage", "uploads")
@@ -143,7 +153,7 @@ def image_search(body: ImageSearchIn, db: Session = Depends(get_db), _=Depends(g
                 "message": "未能识别出商品，建议换一张更清晰的正面图"}
 
     candidates = []
-    # 1) 本地商品库候选（关键词命中数排序）
+    # 1) 本地商品库候选（关键词命中数排序）：识别出的关键词按分隔符拆分，最多取 3 个
     kws = [k for k in re.split(r"[，,\s]+", keywords) if k][:3]
     if kws:
         from sqlalchemy import or_

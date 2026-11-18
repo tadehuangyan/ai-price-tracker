@@ -1,3 +1,7 @@
+/**
+ * 封装后端 API 调用：提供统一的 axios 实例（自动携带登录令牌、统一处理 401），
+ * 以及把接口异常归一为中文提示文本的工具函数。
+ */
 import axios from 'axios'
 import router from './router'
 
@@ -7,12 +11,14 @@ const api = axios.create({
   timeout: 30000,
 })
 
+// 请求拦截器：本地存有登录令牌时自动附加到请求头，实现接口鉴权
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem('spt_token')
   if (token) config.headers.Authorization = `Bearer ${token}`
   return config
 })
 
+// 响应拦截器：401（未登录或令牌失效）时清除本地登录态并跳转登录页
 api.interceptors.response.use(
   (resp) => resp,
   (err) => {
@@ -25,6 +31,7 @@ api.interceptors.response.use(
   }
 )
 
+/** 将接口异常归一为可直接展示的中文错误提示文本 */
 export function errMsg(e: any): string {
   // detail 可能是字符串，也可能是校验错误数组/对象——必须归一为字符串，
   // 否则传给 ElMessage 会被当作配置对象导致提示渲染崩溃（表现为“点击无响应”）

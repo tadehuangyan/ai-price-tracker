@@ -20,6 +20,7 @@ from conftest import auth_headers, make_code, make_product, make_tracking, make_
 # ================= 注册 =================
 
 def _send_code(db, email, purpose, monkeypatch, code="123456"):
+    """辅助函数：将随机验证码固定为指定值后发送，返回该验证码供请求体使用"""
     monkeypatch.setattr(mailer.random, "randint", lambda a, b: int(code))
     ok, msg, _ = mailer.send_verification_code(db, email, purpose)
     assert ok is True
@@ -27,6 +28,7 @@ def _send_code(db, email, purpose, monkeypatch, code="123456"):
 
 
 def test_register_success_with_nickname(client, db, monkeypatch):
+    """【正常流】带昵称注册成功，昵称与默认普通用户角色正确落库"""
     code = _send_code(db, "new@qq.com", "register", monkeypatch)
     r = client.post("/api/auth/register", json={
         "username": "newuser", "password": "abc12345",
@@ -38,6 +40,7 @@ def test_register_success_with_nickname(client, db, monkeypatch):
 
 
 def test_register_success_without_nickname_defaults_username(client, db, monkeypatch):
+    """【正常流】不传昵称注册成功，昵称自动回退为用户名"""
     # body.nickname 为空 -> nickname 取 username（nickname or username 的假分支）
     code = _send_code(db, "nick@qq.com", "register", monkeypatch)
     r = client.post("/api/auth/register", json={
@@ -49,6 +52,7 @@ def test_register_success_without_nickname_defaults_username(client, db, monkeyp
 
 
 def test_register_without_or_wrong_code_400(client, db, monkeypatch):
+    """【异常流】注册时缺少验证码或验证码错误均返回 400"""
     # 验证码校验失败分支
     r = client.post("/api/auth/register", json={
         "username": "codeuser", "password": "abc12345", "email": "code@qq.com",
@@ -63,6 +67,7 @@ def test_register_without_or_wrong_code_400(client, db, monkeypatch):
 
 @pytest.mark.parametrize("bad_name", ["ab", "a-b", "a b", "a" * 21, "中文名"])
 def test_register_username_invalid(client, bad_name):
+    """【异常流】过短/含非法字符/超长/中文用户名注册均被拒绝"""
     # auth.py L20-21：用户名格式不合法
     r = client.post("/api/auth/register", json={
         "username": bad_name, "password": "abc12345", "email": "x@qq.com",
@@ -74,6 +79,7 @@ def test_register_username_invalid(client, bad_name):
 
 
 def test_register_password_missing_digit(client):
+    """【异常流】密码不含数字时注册被拒"""
     # auth.py L22-23：密码缺数字
     r = client.post("/api/auth/register", json={
         "username": "pwduser1", "password": "abcdefgh", "email": "p1@qq.com",
@@ -82,6 +88,7 @@ def test_register_password_missing_digit(client):
 
 
 def test_register_password_missing_letter(client):
+    """【异常流】密码不含字母时注册被拒"""
     # auth.py L22-23：密码缺字母
     r = client.post("/api/auth/register", json={
         "username": "pwduser2", "password": "12345678", "email": "p2@qq.com",
@@ -90,6 +97,7 @@ def test_register_password_missing_letter(client):
 
 
 def test_register_email_invalid_business_check(client, db):
+    """【异常流】直接调用视图函数覆盖业务层邮箱格式校验分支"""
     # auth.py L24-25：邮箱格式校验分支。
     # 接口层 EmailStr 会先拦截非法邮箱（422），此处直接调用视图函数覆盖业务分支。
     body = SimpleNamespace(username="mailuser", password="abc12345", email="not-an-email", nickname=None)
@@ -99,6 +107,7 @@ def test_register_email_invalid_business_check(client, db):
 
 
 def test_register_email_invalid_schema_422(client):
+    """【异常流】非法邮箱格式被请求体 schema 拦截返回 422"""
     r = client.post("/api/auth/register", json={
         "username": "mailuser2", "password": "abc12345", "email": "bad-email",
     })
@@ -106,6 +115,7 @@ def test_register_email_invalid_schema_422(client):
 
 
 def test_register_username_exists(client, db):
+    """【异常流】用户名已被占用时注册被拒"""
     make_user(db, username="exists1", email="e1@qq.com")
     r = client.post("/api/auth/register", json={
         "username": "exists1", "password": "abc12345", "email": "other@qq.com",
@@ -114,6 +124,7 @@ def test_register_username_exists(client, db):
 
 
 def test_register_email_exists(client, db):
+    """【异常流】邮箱已被注册时注册被拒"""
     make_user(db, username="exists2", email="e2@qq.com")
     r = client.post("/api/auth/register", json={
         "username": "exists3", "password": "abc12345", "email": "e2@qq.com",
@@ -124,6 +135,7 @@ def test_register_email_exists(client, db):
 # ================= 登录 =================
 
 def test_login_success_by_username(client, db):
+    """【正常流】用户名密码登录成功并返回 token 与用户信息"""
     make_user(db, username="login1", email="l1@qq.com")
     r = client.post("/api/auth/login", json={"username": "login1", "password": "pass1234"})
     assert r.status_code == 200
@@ -132,6 +144,7 @@ def test_login_success_by_username(client, db):
 
 
 def test_login_success_by_email(client, db):
+    """【正常流】以邮箱作为登录标识也能登录成功"""
     # 登录标识同时匹配用户名/邮箱（OR 条件两侧各覆盖一次）
     make_user(db, username="login2", email="l2@qq.com")
     r = client.post("/api/auth/login", json={"username": "l2@qq.com", "password": "pass1234"})
@@ -139,17 +152,20 @@ def test_login_success_by_email(client, db):
 
 
 def test_login_wrong_password(client, db):
+    """【异常流】密码错误时登录失败"""
     make_user(db, username="login3", email="l3@qq.com")
     r = client.post("/api/auth/login", json={"username": "login3", "password": "wrong999"})
     assert r.status_code == 400 and "用户名或密码错误" in r.json()["detail"]
 
 
 def test_login_user_not_found(client, db):
+    """【异常流】用户不存在时登录失败"""
     r = client.post("/api/auth/login", json={"username": "nobody", "password": "pass1234"})
     assert r.status_code == 400 and "用户名或密码错误" in r.json()["detail"]
 
 
 def test_login_disabled_account(client, db):
+    """【异常流】被禁用账号登录返回 403"""
     make_user(db, username="login4", email="l4@qq.com", status="disabled")
     r = client.post("/api/auth/login", json={"username": "login4", "password": "pass1234"})
     assert r.status_code == 403 and "禁用" in r.json()["detail"]
@@ -158,24 +174,28 @@ def test_login_disabled_account(client, db):
 # ================= 当前用户 / 鉴权依赖 =================
 
 def test_me_ok(client, db):
+    """【正常流】携带有效 token 获取当前用户信息成功"""
     u = make_user(db, username="me1", email="me1@qq.com")
     r = client.get("/api/auth/me", headers=auth_headers(u))
     assert r.status_code == 200 and r.json()["username"] == "me1"
 
 
 def test_me_without_token_401(client):
+    """【异常流】未携带凭证访问返回 401"""
     # deps.py L16-17：无凭证
     r = client.get("/api/auth/me")
     assert r.status_code == 401 and "未登录" in r.json()["detail"]
 
 
 def test_me_invalid_token_401(client):
+    """【异常流】token 解析失败（伪造/过期）返回 401"""
     # deps.py L18-20：token 解析失败
     r = client.get("/api/auth/me", headers={"Authorization": "Bearer bad.token.value"})
     assert r.status_code == 401 and "过期" in r.json()["detail"]
 
 
 def test_me_token_user_missing_401(client):
+    """【异常流】token 有效但对应用户已被删除时返回 401"""
     # deps.py L21-23：token 有效但用户已不存在
     token = create_token(99999, "user")
     r = client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
@@ -183,6 +203,7 @@ def test_me_token_user_missing_401(client):
 
 
 def test_me_disabled_after_login_403(client, db):
+    """【异常流】登录后账号被禁用，再次访问返回 403"""
     # deps.py L24-25：登录后被禁用
     u = make_user(db, username="me2", email="me2@qq.com")
     headers = auth_headers(u)
@@ -193,6 +214,7 @@ def test_me_disabled_after_login_403(client, db):
 
 
 def test_require_admin_rejects_normal_user(client, db):
+    """【异常流】普通用户访问管理接口被拒返回 403"""
     # deps.py L30-31：非管理员访问管理接口
     u = make_user(db, username="me3", email="me3@qq.com")
     r = client.get("/api/admin/config", headers=auth_headers(u))
@@ -200,6 +222,7 @@ def test_require_admin_rejects_normal_user(client, db):
 
 
 def test_get_optional_user_three_branches(db):
+    """覆盖 get_optional_user 的三个分支：无凭证 / 无效 token / 有效 token"""
     # deps.py get_optional_user：无凭证 / 无效 token / 有效 token
     from fastapi.security import HTTPAuthorizationCredentials
 
@@ -213,6 +236,7 @@ def test_get_optional_user_three_branches(db):
 
 
 def test_get_current_user_direct(db):
+    """直接调用鉴权依赖：有效凭证返回用户，无凭证抛 401"""
     u = make_user(db, username="dep1", email="dep1@qq.com")
     from fastapi.security import HTTPAuthorizationCredentials
 
@@ -224,6 +248,7 @@ def test_get_current_user_direct(db):
 
 
 def test_require_admin_direct(db):
+    """直接调用管理员依赖：管理员通过，普通用户抛 403"""
     admin = make_user(db, username="adm", email="adm@qq.com", role="admin")
     assert require_admin(admin).id == admin.id
     with pytest.raises(HTTPException) as e:
@@ -234,6 +259,7 @@ def test_require_admin_direct(db):
 # ================= 个人信息维护 =================
 
 def test_profile_update_nickname_only(client, db):
+    """【正常流】仅修改昵称成功"""
     u = make_user(db, username="pro1", email="pro1@qq.com")
     r = client.put("/api/auth/profile", json={"nickname": "新昵称"}, headers=auth_headers(u))
     assert r.status_code == 200
@@ -241,6 +267,7 @@ def test_profile_update_nickname_only(client, db):
 
 
 def test_profile_update_email_change(client, db, monkeypatch):
+    """【正常流】换绑邮箱成功，旧邮箱收到换绑通知邮件"""
     u = make_user(db, username="pro2", email="pro2@qq.com")
     code = _send_code(db, "pro2new@qq.com", "email_change", monkeypatch)
     r = client.put("/api/auth/profile", json={"email": "pro2new@qq.com", "email_code": code},
@@ -254,6 +281,7 @@ def test_profile_update_email_change(client, db, monkeypatch):
 
 
 def test_profile_update_email_wrong_code_400(client, db, monkeypatch):
+    """【异常流】换绑邮箱验证码错误返回 400，原邮箱保持不变"""
     u = make_user(db, username="pro2b", email="pro2b@qq.com")
     _send_code(db, "pro2bnew@qq.com", "email_change", monkeypatch)
     r = client.put("/api/auth/profile", json={"email": "pro2bnew@qq.com", "email_code": "000001"},
@@ -263,6 +291,7 @@ def test_profile_update_email_wrong_code_400(client, db, monkeypatch):
 
 
 def test_profile_update_email_same_skipped(client, db):
+    """【边界】新邮箱与当前邮箱相同则跳过查重与修改"""
     # body.email == user.email -> 不查重不修改
     u = make_user(db, username="pro3", email="pro3@qq.com")
     r = client.put("/api/auth/profile", json={"email": "pro3@qq.com"}, headers=auth_headers(u))
@@ -270,6 +299,7 @@ def test_profile_update_email_same_skipped(client, db):
 
 
 def test_profile_update_email_exists_400(client, db):
+    """【异常流】换绑到已被他人注册的邮箱返回 400"""
     make_user(db, username="pro4a", email="taken@qq.com")
     u = make_user(db, username="pro4b", email="pro4b@qq.com")
     r = client.put("/api/auth/profile", json={"email": "taken@qq.com"}, headers=auth_headers(u))
@@ -277,6 +307,7 @@ def test_profile_update_email_exists_400(client, db):
 
 
 def test_profile_update_password_ok(client, db, monkeypatch):
+    """【正常流】修改密码成功，新密码可正常登录并收到通知邮件"""
     u = make_user(db, username="pro5", email="pro5@qq.com")
     code = _send_code(db, "pro5@qq.com", "password_change", monkeypatch)
     r = client.put("/api/auth/profile", json={"password": "newpass99", "password_code": code},
@@ -292,6 +323,7 @@ def test_profile_update_password_ok(client, db, monkeypatch):
 
 
 def test_profile_update_password_wrong_code_400(client, db, monkeypatch):
+    """【异常流】修改密码验证码错误返回 400"""
     u = make_user(db, username="pro5b", email="pro5b@qq.com")
     _send_code(db, "pro5b@qq.com", "password_change", monkeypatch)
     r = client.put("/api/auth/profile", json={"password": "newpass99", "password_code": "000001"},
@@ -300,6 +332,7 @@ def test_profile_update_password_wrong_code_400(client, db, monkeypatch):
 
 
 def test_profile_update_password_invalid_charset(client, db):
+    """【异常流】新密码不含字母或不含数字均被拒"""
     # 密码含字母数字条件为假 -> 400
     u = make_user(db, username="pro6", email="pro6@qq.com")
     for bad in ("12345678", "abcdefgh"):
@@ -308,6 +341,7 @@ def test_profile_update_password_invalid_charset(client, db):
 
 
 def test_profile_update_password_too_short(client, db):
+    """【异常流】新密码长度不足 8 位被拒"""
     # 含字母数字但长度 < 8 -> 400（len 条件为真）
     u = make_user(db, username="pro7", email="pro7@qq.com")
     r = client.put("/api/auth/profile", json={"password": "ab1"}, headers=auth_headers(u))
@@ -315,6 +349,7 @@ def test_profile_update_password_too_short(client, db):
 
 
 def test_profile_update_password_empty_skipped(client, db):
+    """【边界】密码传空串则跳过修改，原密码仍可登录"""
     # body.password 为空 -> 不改密码
     u = make_user(db, username="pro8", email="pro8@qq.com")
     r = client.put("/api/auth/profile", json={"password": ""}, headers=auth_headers(u))
@@ -323,6 +358,7 @@ def test_profile_update_password_empty_skipped(client, db):
 
 
 def test_profile_update_nothing(client, db):
+    """【边界】空请求体更新个人信息不报错"""
     u = make_user(db, username="pro9", email="pro9@qq.com")
     r = client.put("/api/auth/profile", json={}, headers=auth_headers(u))
     assert r.status_code == 200
@@ -331,6 +367,7 @@ def test_profile_update_nothing(client, db):
 # ================= 我的追踪 =================
 
 def test_my_trackings_ok(client, db):
+    """【正常流】我的追踪列表返回商品名、目标价与创建时间"""
     u = make_user(db, username="trk1", email="trk1@qq.com")
     p = make_product(db)
     make_tracking(db, u, p, target_price=99.0)
@@ -342,6 +379,7 @@ def test_my_trackings_ok(client, db):
 
 
 def test_my_trackings_created_at_none(client, db):
+    """【边界】关注记录 created_at 为空时接口返回 null"""
     # created_at 为空 -> 返回 None 的条件分支
     u = make_user(db, username="trk2", email="trk2@qq.com")
     p = make_product(db)
@@ -354,6 +392,7 @@ def test_my_trackings_created_at_none(client, db):
 
 
 def test_my_trackings_empty(client, db):
+    """【边界】无关注记录时返回空列表"""
     u = make_user(db, username="trk3", email="trk3@qq.com")
     r = client.get("/api/auth/my-trackings", headers=auth_headers(u))
     assert r.status_code == 200 and r.json() == []
@@ -362,17 +401,20 @@ def test_my_trackings_empty(client, db):
 # ================= security.py 单元 =================
 
 def test_hash_and_verify_password_roundtrip():
+    """密码哈希后校验往返一致，错误密码校验失败"""
     h = hash_password("secret123")
     assert verify_password("secret123", h) is True
     assert verify_password("other456", h) is False
 
 
 def test_verify_password_invalid_hash_returns_false():
+    """【异常流】非法 bcrypt 哈希校验不抛异常，返回 False"""
     # 异常分支：非法 bcrypt 哈希
     assert verify_password("secret123", "not-a-bcrypt-hash") is False
 
 
 def test_create_and_decode_token_roundtrip():
+    """JWT 签发与解码往返正确，非法 token 解码返回 None"""
     token = create_token(42, "admin")
     payload = decode_token(token)
     assert payload["sub"] == "42" and payload["role"] == "admin"
@@ -385,6 +427,7 @@ from app.services import mailer
 
 
 def test_send_verification_code_and_rate_limit(db, monkeypatch):
+    """验证码发送成功，并验证 60 秒内重发被频率限制拦截"""
     monkeypatch.setattr(mailer.random, "randint", lambda a, b: 123456)
     ok, msg, code = mailer.send_verification_code(db, "v@qq.com", "register")
     assert ok is True and code == "123456" and "模拟投递" in msg
@@ -397,6 +440,7 @@ def test_send_verification_code_and_rate_limit(db, monkeypatch):
 
 
 def test_check_verification_code_branches(db, monkeypatch):
+    """覆盖验证码校验各分支：空/错误/不作废/正确并作废/已使用/已过期"""
     monkeypatch.setattr(mailer.random, "randint", lambda a, b: 654321)
     mailer.send_verification_code(db, "c@qq.com", "password_change")
     # 空验证码 -> False 分支
@@ -421,6 +465,7 @@ def test_check_verification_code_branches(db, monkeypatch):
 
 
 def test_mail_to_dict_and_category_fallback(db):
+    """邮件序列化：分类名映射正确，未知分类回退原值，created_at 为空返回 None"""
     from app.models import MailMessage
 
     m1 = MailMessage(user_id=1, to_email="m@qq.com", category="price_alert",

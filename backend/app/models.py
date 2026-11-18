@@ -1,3 +1,8 @@
+"""ORM 数据模型定义
+
+覆盖用户、商品/报价/价格快照、追踪与降价提醒，以及后台管理所需的
+数据源、采集任务、系统日志/配置、模拟邮箱、敏感词与知识库等数据表。
+"""
 from datetime import datetime
 
 from sqlalchemy import (
@@ -9,6 +14,7 @@ from .database import Base
 
 
 class User(Base):
+    """系统用户：账号、密码哈希、角色与状态"""
     __tablename__ = "users"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -20,11 +26,13 @@ class User(Base):
     status = Column(String(16), default="active")  # active / disabled
     created_at = Column(DateTime, default=datetime.now)
 
+    # 级联删除：用户删除时一并清理其追踪记录与提醒
     trackings = relationship("Tracking", back_populates="user", cascade="all, delete-orphan")
     alerts = relationship("Alert", back_populates="user", cascade="all, delete-orphan")
 
 
 class Product(Base):
+    """商品：比价与追踪的主体，可关联多个平台报价"""
     __tablename__ = "products"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -57,11 +65,13 @@ class Listing(Base):
     snapshots = relationship("PriceSnapshot", back_populates="listing", cascade="all, delete-orphan")
 
     __table_args__ = (
+        # 同一商品在同一平台的站内商品 ID 不重复
         UniqueConstraint("product_id", "platform", "platform_item_id", name="uq_listing"),
     )
 
 
 class PriceSnapshot(Base):
+    """价格快照：某报价在某一时刻的价格采样，用于绘制历史走势"""
     __tablename__ = "price_snapshots"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -72,11 +82,13 @@ class PriceSnapshot(Base):
     listing = relationship("Listing", back_populates="snapshots")
 
     __table_args__ = (
+        # 联合索引：按报价查询时间范围内的快照（历史走势）
         Index("ix_snap_listing_time", "listing_id", "captured_at"),
     )
 
 
 class Tracking(Base):
+    """价格追踪订阅：用户对某商品设定的追踪（含可选目标价）"""
     __tablename__ = "trackings"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -89,6 +101,7 @@ class Tracking(Base):
     product = relationship("Product")
 
     __table_args__ = (
+        # 每个用户对同一商品只能有一条追踪记录
         UniqueConstraint("user_id", "product_id", name="uq_user_product"),
     )
 

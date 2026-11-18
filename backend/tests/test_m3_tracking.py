@@ -21,6 +21,7 @@ from app.services.alerts import check_price_alerts
 
 
 def _user_product(db):
+    """辅助函数：创建一个测试用户和一个测试商品并返回"""
     u = make_user(db, username="u3", email="u3@qq.com")
     p = make_product(db, name="追踪手机", category="手机")
     return u, p
@@ -29,6 +30,7 @@ def _user_product(db):
 # ================= 添加追踪 =================
 
 def test_add_tracking_success_no_target(client, db):
+    """【正常流】不设目标价添加追踪成功"""
     u, p = _user_product(db)
     r = client.post("/api/tracking", json={"product_id": p.id},
                     headers=auth_headers(u))
@@ -38,6 +40,7 @@ def test_add_tracking_success_no_target(client, db):
 
 
 def test_add_tracking_with_valid_target(client, db):
+    """【正常流】带合法目标价添加追踪成功"""
     u, p = _user_product(db)
     r = client.post("/api/tracking", json={"product_id": p.id, "target_price": 88.0},
                     headers=auth_headers(u))
@@ -46,12 +49,14 @@ def test_add_tracking_with_valid_target(client, db):
 
 
 def test_add_tracking_product_404(client, db):
+    """【异常流】追踪不存在的商品返回 404"""
     u, _ = _user_product(db)
     r = client.post("/api/tracking", json={"product_id": 99999}, headers=auth_headers(u))
     assert r.status_code == 404 and "商品不存在" in r.json()["detail"]
 
 
 def test_add_tracking_exists_update_target(client, db):
+    """【正常流】重复追踪时更新已有记录的目标价"""
     # 已存在 + 新目标价 -> 更新目标价分支
     u, p = _user_product(db)
     make_tracking(db, u, p, target_price=90.0)
@@ -62,6 +67,7 @@ def test_add_tracking_exists_update_target(client, db):
 
 
 def test_add_tracking_exists_no_target_keeps_old(client, db):
+    """【边界】重复追踪且未传目标价时保留原目标价"""
     # 已存在 + 无目标价 -> 不修改目标价分支
     u, p = _user_product(db)
     make_tracking(db, u, p, target_price=90.0)
@@ -71,6 +77,7 @@ def test_add_tracking_exists_no_target_keeps_old(client, db):
 
 
 def test_add_tracking_target_invalid(client, db):
+    """【异常流】目标价小于等于 0 时被拒绝"""
     # 目标价 <= 0 -> 400（is not None 为真 且 <=0 为真）
     u, p = _user_product(db)
     for bad in (0, -1.5):
@@ -80,6 +87,7 @@ def test_add_tracking_target_invalid(client, db):
 
 
 def test_add_tracking_limit_reached(client, db):
+    """【异常流】追踪数量达到上限后继续添加被拒"""
     # 数量上限条件为真 -> 400
     u, _ = _user_product(db)
     for i in range(30):
@@ -93,6 +101,7 @@ def test_add_tracking_limit_reached(client, db):
 # ================= 追踪列表 =================
 
 def test_list_trackings_ok(client, db):
+    """【正常流】追踪列表返回商品名、当前最低价与创建时间"""
     u, p = _user_product(db)
     l = make_listing(db, p, current_price=100.0)
     make_listing(db, p, platform="taobao", url="https://t/1", current_price=120.0)
@@ -106,6 +115,7 @@ def test_list_trackings_ok(client, db):
 
 
 def test_list_trackings_no_priced_listing_and_null_created_at(client, db):
+    """【边界】无有效报价时当前价为 null，created_at 为空时也返回 null"""
     # 无有效报价 -> current_price None；created_at 为空 -> None 分支
     u, p = _user_product(db)
     t = make_tracking(db, u, p)
@@ -117,6 +127,7 @@ def test_list_trackings_no_priced_listing_and_null_created_at(client, db):
 
 
 def test_list_trackings_empty(client, db):
+    """【边界】无关注记录时追踪列表返回空数组"""
     u, _ = _user_product(db)
     assert client.get("/api/tracking", headers=auth_headers(u)).json() == []
 
@@ -124,6 +135,7 @@ def test_list_trackings_empty(client, db):
 # ================= 删除追踪 =================
 
 def test_remove_tracking_ok(client, db):
+    """【正常流】删除自己的追踪记录成功"""
     u, p = _user_product(db)
     t = make_tracking(db, u, p)
     r = client.delete(f"/api/tracking/{t.id}", headers=auth_headers(u))
@@ -132,12 +144,14 @@ def test_remove_tracking_ok(client, db):
 
 
 def test_remove_tracking_404(client, db):
+    """【异常流】删除不存在的追踪记录返回 404"""
     u, _ = _user_product(db)
     r = client.delete("/api/tracking/99999", headers=auth_headers(u))
     assert r.status_code == 404
 
 
 def test_remove_tracking_forbidden_other_user(client, db):
+    """【异常流】删除他人追踪记录被拒返回 403"""
     # t.user_id != user.id 为真 且 非 admin -> 403
     u1, p = _user_product(db)
     u2 = make_user(db, username="u3b", email="u3b@qq.com")
@@ -147,6 +161,7 @@ def test_remove_tracking_forbidden_other_user(client, db):
 
 
 def test_remove_tracking_admin_removes_other(client, db):
+    """【正常流】管理员可删除他人的追踪记录"""
     # owner 不匹配 但 admin -> 与条件的第二个操作数为假，允许删除
     u1, p = _user_product(db)
     admin = make_user(db, username="adm3", email="adm3@qq.com", role="admin")
@@ -158,6 +173,7 @@ def test_remove_tracking_admin_removes_other(client, db):
 # ================= 价格走势 =================
 
 def _seed_snapshots(db, p):
+    """辅助函数：为商品的京东/淘宝两个链接构造多天价格快照"""
     l1 = make_listing(db, p, platform="jd", url="https://j/1", current_price=100.0)
     l2 = make_listing(db, p, platform="taobao", url="https://t/1", current_price=95.0)
     base = datetime(2026, 6, 1, 10, 0)
@@ -170,6 +186,7 @@ def _seed_snapshots(db, p):
 
 
 def test_trend_ok_with_platform_filter(client, db):
+    """【正常流】带平台过滤的价格走势按天取该平台最低价并统计区间"""
     u, p = _user_product(db)
     _seed_snapshots(db, p)
     r = client.get(f"/api/tracking/trend/{p.id}", params={"days": 365, "platform": "jd"},
@@ -185,6 +202,7 @@ def test_trend_ok_with_platform_filter(client, db):
 
 
 def test_trend_ok_no_platform_filter(client, db):
+    """【正常流】不带平台过滤时跨平台按天取最低价"""
     # 平台过滤条件为假：跨平台按天最低价
     u, p = _user_product(db)
     _seed_snapshots(db, p)
@@ -194,6 +212,7 @@ def test_trend_ok_no_platform_filter(client, db):
 
 
 def test_trend_no_snapshots(client, db):
+    """【边界】无任何快照时走势点为空且统计值均为 null"""
     # 空序列 -> min/max/avg 为 None 的条件分支；无报价 -> current None
     u, p = _user_product(db)
     data = client.get(f"/api/tracking/trend/{p.id}").json()
@@ -203,12 +222,14 @@ def test_trend_no_snapshots(client, db):
 
 
 def test_trend_product_404(client, db):
+    """【异常流】查询不存在商品的走势返回 404"""
     u, _ = _user_product(db)
     r = client.get("/api/tracking/trend/99999", headers=auth_headers(u))
     assert r.status_code == 404
 
 
 def test_trend_days_boundary(client, db):
+    """【边界】days 参数低于下限返回 422，等于下限通过"""
     u, p = _user_product(db)
     # days 边界：低于下限 422，等于下限通过
     assert client.get(f"/api/tracking/trend/{p.id}", params={"days": 6}).status_code == 422
@@ -218,6 +239,7 @@ def test_trend_days_boundary(client, db):
 # ================= 降价提醒（站内消息） =================
 
 def test_my_alerts_all_and_unread(client, db):
+    """【正常流】提醒列表支持全部/仅未读两种查询"""
     u, p = _user_product(db)
     make_alert(db, u, p, is_read=True, message="已读提醒")
     make_alert(db, u, None, is_read=False, message="无商品提醒")  # product 为空 -> 名称 "" 分支
@@ -231,6 +253,7 @@ def test_my_alerts_all_and_unread(client, db):
 
 
 def test_mark_read_own(client, db):
+    """【正常流】将自己的提醒标记为已读成功"""
     u, p = _user_product(db)
     a = make_alert(db, u, p)
     r = client.post(f"/api/tracking/alerts/{a.id}/read", headers=auth_headers(u))
@@ -239,6 +262,7 @@ def test_mark_read_own(client, db):
 
 
 def test_mark_read_not_found_is_noop(client, db):
+    """【边界】标记不存在的提醒为已读是空操作，不报错"""
     # a 为空 -> 不报错直接返回（条件短路分支）
     u, _ = _user_product(db)
     r = client.post("/api/tracking/alerts/99999/read", headers=auth_headers(u))
@@ -246,6 +270,7 @@ def test_mark_read_not_found_is_noop(client, db):
 
 
 def test_mark_read_other_user_is_noop(client, db):
+    """【边界】标记他人提醒为已读是空操作，状态不变"""
     # a 存在但 user 不匹配 -> 不修改（条件后半段为假）
     u1, p = _user_product(db)
     u2 = make_user(db, username="u3c", email="u3c@qq.com")
@@ -256,6 +281,7 @@ def test_mark_read_other_user_is_noop(client, db):
 
 
 def test_mark_all_read(client, db):
+    """【正常流】一键将全部未读提醒标记为已读"""
     u, p = _user_product(db)
     make_alert(db, u, p, is_read=False)
     make_alert(db, u, p, is_read=False)
@@ -266,6 +292,7 @@ def test_mark_all_read(client, db):
 # ================= check_price_alerts 服务（目标价比对） =================
 
 def test_alerts_created_when_price_meets_target(client, db):
+    """【正常流】当前价达到目标价时生成降价提醒"""
     # price == target（不满足 > 条件）-> 生成提醒
     u, p = _user_product(db)
     make_listing(db, p, current_price=90.0)
@@ -277,6 +304,7 @@ def test_alerts_created_when_price_meets_target(client, db):
 
 
 def test_alerts_price_above_target_skipped(client, db):
+    """【边界】当前价高于目标价时不生成提醒"""
     # price > target -> continue
     u, p = _user_product(db)
     make_listing(db, p, current_price=95.0)
@@ -286,6 +314,7 @@ def test_alerts_price_above_target_skipped(client, db):
 
 
 def test_alerts_price_none_skipped(client, db):
+    """【边界】商品无任何报价时不生成提醒"""
     # 无任何报价 -> min 为 None -> continue
     u, p = _user_product(db)
     make_tracking(db, u, p, target_price=90.0)
@@ -293,6 +322,7 @@ def test_alerts_price_none_skipped(client, db):
 
 
 def test_alerts_duplicate_same_day_skipped(client, db):
+    """【边界】同一天重复检查不生成重复提醒（去重生效）"""
     # 当天已有提醒 -> 去重分支
     u, p = _user_product(db)
     make_listing(db, p, current_price=80.0)
@@ -303,6 +333,7 @@ def test_alerts_duplicate_same_day_skipped(client, db):
 
 
 def test_alerts_no_target_price_excluded(client, db):
+    """【边界】未设目标价的订阅不参与提醒比对"""
     # target_price 为 None 的订阅不参与比对（查询过滤）
     u, p = _user_product(db)
     make_listing(db, p, current_price=80.0)

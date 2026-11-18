@@ -19,6 +19,7 @@ from conftest import auth_headers, make_user
 # ================= web_fetch =================
 
 def test_validate_url_security():
+    """【安全】URL 校验放行合法 http(s)，拒绝非 http 协议与内网地址"""
     assert web_fetch.validate_url("https://item.jd.com/1.html") == "https://item.jd.com/1.html"
     for bad in ("ftp://x.com/a", "file:///etc/passwd", "http://localhost:8000/a",
                 "http://127.0.0.1/a", "http://192.168.1.1/a", "http://10.0.0.5/a", "not a url"):
@@ -27,6 +28,7 @@ def test_validate_url_security():
 
 
 def test_html_to_text_extracts_title_and_body():
+    """【正常流】HTML 解析提取标题与正文，剔除脚本和样式"""
     page = """<html><head><title>显卡行情</title><style>.x{}</style>
     <script>alert(1)</script></head><body><h1>RTX4060</h1>
     <p>本周价格持续走低。</p><p>预计仍有下降空间。</p></body></html>"""
@@ -37,6 +39,7 @@ def test_html_to_text_extracts_title_and_body():
 
 
 def test_fetch_page_text(monkeypatch):
+    """【正常流】抓取网页返回标题与正文（mock HTTP 请求）"""
     fake = lambda url, **k: SimpleNamespace(
         text="<html><head><title>行情</title></head><body><p>内容</p></body></html>",
         url="https://example.com/p", raise_for_status=lambda: None)
@@ -46,6 +49,7 @@ def test_fetch_page_text(monkeypatch):
 
 
 def test_search_snippets_parses_results(monkeypatch):
+    """【正常流】搜索结果页解析出标题/链接/摘要"""
     html = """<html><body>
     <li class="b_algo"><h2><a href="https://example.com/a">显卡行情</a></h2><p>RTX4060 价格走低</p></li>
     <li class="b_algo"><h2><a href="https://example.com/b">手机降价榜</a></h2><p>618 促销开启</p></li>
@@ -58,6 +62,7 @@ def test_search_snippets_parses_results(monkeypatch):
 
 
 def test_search_snippets_empty(monkeypatch):
+    """【边界】无结果返回空列表，空白关键词抛 ValueError"""
     monkeypatch.setattr("app.services.web_fetch.httpx.get",
                         lambda url, **k: SimpleNamespace(text="<html></html>", url=url, raise_for_status=lambda: None))
     assert web_fetch.search_snippets("xxx") == []
@@ -68,6 +73,7 @@ def test_search_snippets_empty(monkeypatch):
 # ================= mcp_server JSON-RPC 协议 =================
 
 def test_mcp_server_initialize_and_list_tools():
+    """【正常流】MCP 服务端 initialize 握手与 tools/list 返回工具清单"""
     resp = mcp_server.handle_request({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
     assert resp["result"]["serverInfo"]["name"] == "spt-web-mcp"
     assert resp["result"]["protocolVersion"] == mcp_server.PROTOCOL_VERSION
@@ -77,12 +83,14 @@ def test_mcp_server_initialize_and_list_tools():
 
 
 def test_mcp_server_notifications_and_unknown_method():
+    """【边界】通知类消息无响应，未知方法返回 -32601 错误码"""
     assert mcp_server.handle_request({"jsonrpc": "2.0", "method": "notifications/initialized"}) is None
     resp = mcp_server.handle_request({"jsonrpc": "2.0", "id": 3, "method": "foo/bar"})
     assert resp["error"]["code"] == -32601
 
 
 def test_mcp_server_tools_call(monkeypatch):
+    """【正常流】tools/call 调用 fetch_webpage 成功，未知工具返回 isError"""
     monkeypatch.setattr("app.services.web_fetch.fetch_page_text",
                         lambda url: {"title": "行情", "text": "正文", "url": url})
     resp = mcp_server.handle_request({"jsonrpc": "2.0", "id": 4, "method": "tools/call",
@@ -96,6 +104,7 @@ def test_mcp_server_tools_call(monkeypatch):
 
 
 def test_mcp_server_tools_call_rejects_bad_url():
+    """【安全】tools/call 拦截非法 URL，返回 isError"""
     # URL 校验拦截（真实 web_fetch，不触网：校验先于请求失败）
     resp = mcp_server.handle_request({"jsonrpc": "2.0", "id": 6, "method": "tools/call",
                                       "params": {"name": "fetch_webpage", "arguments": {"url": "ftp://x"}}})
@@ -105,6 +114,7 @@ def test_mcp_server_tools_call_rejects_bad_url():
 # ================= mcp_client stdio 端到端 =================
 
 def test_mcp_client_stdio_list_tools():
+    """【正常流】stdio 子进程端到端握手并列出工具（真实子进程不触网）"""
     tools = mcp_client.list_tools()  # 真实子进程 + JSON-RPC 握手（不触网）
     names = {t["name"] for t in tools}
     assert {"fetch_webpage", "web_search"} <= names
@@ -112,6 +122,7 @@ def test_mcp_client_stdio_list_tools():
 
 
 def test_mcp_client_stdio_call_tool_error():
+    """【异常流】服务端校验失败时客户端抛 McpError"""
     with pytest.raises(mcp_client.McpError):
         mcp_client.call_tool("fetch_webpage", {"url": "ftp://bad"})  # 服务端校验失败 -> isError
     mcp_client.mcp.close()
@@ -120,6 +131,7 @@ def test_mcp_client_stdio_call_tool_error():
 # ================= agent_tools 经 MCP 的工具链 =================
 
 def test_agent_tool_web_search_via_mcp(db, monkeypatch):
+    """【正常流】web_search 工具经 MCP 调用返回结果，缺参时提示必填字段"""
     monkeypatch.setattr("app.services.mcp_client.call_tool",
                         lambda name, args: f"{name}:{args['query']}")
     data = _json.loads(agent_tools.dispatch(db, None, "web_search",
@@ -129,6 +141,7 @@ def test_agent_tool_web_search_via_mcp(db, monkeypatch):
 
 
 def test_agent_tool_fetch_webpage_via_mcp(db, monkeypatch):
+    """【正常流】fetch_webpage 工具经 MCP 抓取网页正文"""
     monkeypatch.setattr("app.services.mcp_client.call_tool", lambda name, args: "网页正文")
     data = _json.loads(agent_tools.dispatch(db, None, "fetch_webpage",
                                             _json.dumps({"url": "https://x"})))
@@ -137,6 +150,7 @@ def test_agent_tool_fetch_webpage_via_mcp(db, monkeypatch):
 
 
 def test_agent_tool_mcp_failure_degrades(db, monkeypatch):
+    """【降级】MCP 调用失败时错误回填给模型，不中断对话"""
     def boom(name, args):
         raise mcp_client.McpError("连接已关闭")
     monkeypatch.setattr("app.services.mcp_client.call_tool", boom)
@@ -148,6 +162,7 @@ def test_agent_tool_mcp_failure_degrades(db, monkeypatch):
 # ================= Agent 对话中主动查行情（流式） =================
 
 def test_stream_agent_web_search(client, db, monkeypatch):
+    """【正常流】流式对话中 Agent 调用 web_search 查行情后作答"""
     from app.services import ai_advisor
 
     u = make_user(db, username="mcp_user", email="mcp@qq.com")

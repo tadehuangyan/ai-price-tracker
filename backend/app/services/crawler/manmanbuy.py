@@ -25,6 +25,7 @@ HEADERS_UA = (
     "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
 )
 
+# 慢慢买返回的站点名（中文）-> 系统统一平台标识 的映射
 SITE_PLATFORM_MAP = {
     "淘宝天猫": "taobao",
     "淘宝": "taobao",
@@ -68,13 +69,14 @@ def _parse_date_price(raw: str):
     points = []
     if not raw:
         return points
+    # 逐条匹配 [时间戳, 价格, 备注] 三元组（时间戳兼容 10 位秒 / 13 位毫秒）
     for m in re.finditer(r"\[(\d{10,13})\s*,\s*([0-9.]+)\s*,\s*\"([^\"]*)\"\]", raw):
         ts, price, note = m.group(1), float(m.group(2)), m.group(3)
         if len(ts) == 13:
-            ts = int(ts) // 1000
+            ts = int(ts) // 1000  # 毫秒时间戳转秒
         d = datetime.fromtimestamp(ts, tz=timezone.utc).astimezone().strftime("%Y-%m-%d")
         points.append((d, price))
-    # 去重（同一天取最后一条）
+    # 去重（同一天取最后一条）并按日期升序输出
     seen = {}
     for d, p in points:
         seen[d] = p
@@ -90,13 +92,14 @@ def query_history(product_url: str, timeout_ms: int = 30000) -> dict:
 
     p, browser, page = launch_page()
     try:
-        _load_storage(browser)
+        _load_storage(browser)  # 注入登录 Cookie，未登录页面查不到历史数据
         return query_history_with(page, product_url, timeout_ms)
     finally:
         close_all(p, browser, page)
 
 
 def _load_storage(browser):
+    """载入扫码登录保存的 cookies 到浏览器上下文（失败仅告警不中断）"""
     try:
         browser.contexts[0].add_cookies(json.load(open(STORAGE_PATH, encoding="utf-8"))["cookies"])
     except Exception as e:
@@ -107,6 +110,7 @@ def query_history_with(page, product_url: str, timeout_ms: int = 30000) -> dict:
     """在给定 page 上查询历史价格（复用浏览器时使用）"""
     api_result = {}
 
+    # 监听页面 XHR：拦截 api.ashx (getHistoryTrend) 响应，直接拿结构化 JSON
     def on_resp(resp):
         if "tool.manmanbuy.com/api.ashx" in resp.url:
             try:
@@ -118,9 +122,11 @@ def query_history_with(page, product_url: str, timeout_ms: int = 30000) -> dict:
 
     page.on("response", on_resp)
     try:
+        # 打开历史价查询页，商品链接经 URL 编码拼到 url 参数
         target = "https://tool.manmanbuy.com/HistoryLowest.aspx?url=" + quote(product_url, safe="")
         page.goto(target, timeout=timeout_ms, wait_until="domcontentloaded")
 
+        # 轮询等待接口返回数据（每秒一次，直到超时）
         waited = 0
         while waited < timeout_ms:
             page.wait_for_timeout(1000)
@@ -146,7 +152,7 @@ def query_history_with(page, product_url: str, timeout_ms: int = 30000) -> dict:
     title = (api_result.get("spName") or "").strip()
     current = api_result.get("currentPrice") or 0
     if not current and history:
-        current = history[-1][1]
+        current = history[-1][1]  # 当前价缺失时取历史序列最后一点兜底
     return {
         "platform": SITE_PLATFORM_MAP.get(site, (site or "manmanbuy").lower()),
         "site_name": site,
@@ -178,7 +184,7 @@ def discover_products(keyword: str, limit: int = 12) -> list:
         )
         page.goto(url, timeout=35000, wait_until="domcontentloaded")
         page.wait_for_timeout(4000)
-        # 每张卡片取：标题、价格、平台、历史链接、图片
+        # 每张卡片取：标题、价格、平台、历史链接、图片（在浏览器内一次性批量提取）
         cards = page.eval_on_selector_all(
             "a[href*='HistoryLowest']",
             """els => els.map(e => {
@@ -201,15 +207,16 @@ def discover_products(keyword: str, limit: int = 12) -> list:
         )
         seen, out = set(), []
         for c in cards:
+            # HistoryLowest 链接的 url= 参数即原始商品链接（URL 编码，需解码）
             m = re.search(r"url=([^&]+)", c["href"])
             if not m:
                 continue
             target = unquote(m.group(1))
             if target in seen:
-                continue
+                continue  # 同一商品链接去重
             seen.add(target)
             if not c["title"] or len(c["title"]) < 5:
-                continue
+                continue  # 过滤标题残缺的无效卡片
             out.append(
                 {
                     "title": c["title"][:120],
@@ -265,7 +272,7 @@ def browse_category(cf_code: str = "", limit: int = 24) -> list:
         out = []
         for c in cards:
             if not c["title"] or not c["url"]:
-                continue
+                continue  # 跳过缺标题/链接的无效爆料卡
             c["kind"] = "deal"
             out.append(c)
             if len(out) >= limit:
@@ -301,8 +308,9 @@ def search_deals(keyword: str, limit: int = 10) -> list:
         seen, out = set(), []
         for c in cards:
             if c["href"] in seen:
-                continue
+                continue  # 爆料链接去重
             seen.add(c["href"])
+            # 从卡片文本中正则提取「X 元」形式的爆料价
             m = re.search(r"(\d+(?:\.\d+)?)\s*元", c["text"])
             out.append(
                 {
@@ -343,16 +351,18 @@ def extract_deal_with(page, deal_url: str) -> dict:
         title = (page.title() or "").split("_")[0].strip()
     hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
     target = ""
+    # 优先取带签名参数 st= 的 HistoryLowest 链接（确定指向目标商品）
     signed = [h for h in hrefs if "HistoryLowest.aspx" in h and "st=" in h]
     if signed:
         m = re.search(r"url=([^&]+)", signed[0])
         if m:
             target = unquote(m.group(1))
     if not target:
+        # 兜底：从全部链接中找第一个 url= 参数
         m = re.search(r"url=([^&]+)", " ".join(hrefs))
         if m:
             target = unquote(m.group(1))
-    # 爆料价
+    # 爆料价：正则提取正文中的「到手价：XX」
     text = page.locator("body").inner_text()[:2000]
     pm = re.search(r"到手价[：:]\s*￥?\s*([0-9.]+)", text)
     price = float(pm.group(1)) if pm else None
@@ -374,6 +384,7 @@ def live_product(url: str, timeout_ms: int = 30000) -> dict:
         _load_storage(browser)
         target = url
         deal_url = ""
+        # 爆料链接先解析出原始商品链接，再查历史价（同一浏览器会话内完成）
         if "manmanbuy.com/discuxiao" in url:
             deal_url = url
             info = extract_deal_with(page, url)

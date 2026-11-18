@@ -1,3 +1,8 @@
+/**
+ * 登录 / 注册页：以"入馆登记"卡片承载双选项卡表单。
+ * 支持账密登录、邮箱验证码注册（SMTP 受限走沙箱模拟收件箱），
+ * 并编排邮戳档案背景与卡片入场动效。
+ */
 <template>
   <div class="login-page">
     <!-- ============ 背景层：邮戳档案 ============ -->
@@ -49,6 +54,7 @@
           <h2 class="card-title">入馆登记</h2>
         </div>
 
+        <!-- 登录 / 注册 双选项卡：同一 loading 态共用于两个提交按钮 -->
         <el-tabs v-model="tab">
           <el-tab-pane label="登录" name="login">
             <el-form :model="loginForm" @submit.prevent="doLogin">
@@ -79,6 +85,7 @@
                 <div class="field-label kicker">E-MAIL · 邮箱</div>
                 <el-input v-model="regForm.email" placeholder="邮箱" size="large" />
               </el-form-item>
+              <!-- 验证码行：发送按钮在 60s 倒计时内禁用，防连发 -->
               <el-form-item>
                 <div class="field-label kicker">CODE · 验证码</div>
                 <div style="display: flex; gap: 8px; width: 100%">
@@ -111,6 +118,7 @@
       </section>
     </div>
 
+    <!-- 模拟收件箱弹窗：SMTP 端口受限，验证码邮件在此沙箱中查看 -->
     <el-dialog v-model="sandboxVisible" title="模拟收件箱（沙箱）" width="560px">
       <div class="muted" style="margin-bottom: 10px">
         SMTP 端口受限，系统邮件不真实外发，而是模拟投递到沙箱收件箱（类比支付宝沙箱）。当前查询：{{ regForm.email || '（请先填写邮箱）' }}
@@ -143,19 +151,28 @@ import { splitReveal, popIn, pinPress, magnetic, reducedMotion } from '../anim'
 
 const router = useRouter()
 const auth = useAuthStore()
+// 当前选项卡：login 登录 / register 注册
 const tab = ref('login')
+// 提交按钮加载态（登录与注册共用）
 const loading = ref(false)
 
+// 登录表单数据
 const loginForm = reactive({ username: '', password: '', remember: true })
+// 注册表单数据（code 为邮箱验证码）
 const regForm = reactive({ username: '', password: '', email: '', nickname: '', code: '' })
 
 // 模拟邮箱（沙箱）
+// 验证码重发倒计时（秒）：>0 时禁用发送按钮
 const codeCountdown = ref(0)
 let countdownTimer: any = null
+// 模拟收件箱弹窗可见性
 const sandboxVisible = ref(false)
+// 收件箱查询加载态
 const sandboxLoading = ref(false)
+// 沙箱收件箱中的模拟邮件列表
 const sandboxMails = ref<any[]>([])
 
+// 启动 60s 重发倒计时，到 0 自动停止
 function startCountdown() {
   codeCountdown.value = 60
   countdownTimer && clearInterval(countdownTimer)
@@ -165,6 +182,7 @@ function startCountdown() {
   }, 1000)
 }
 
+/** 发送注册验证码：模拟投递到沙箱收件箱，成功后启动倒计时并打开收件箱 */
 async function sendCode() {
   if (!regForm.email) return ElMessage.warning('请先填写邮箱')
   try {
@@ -177,6 +195,7 @@ async function sendCode() {
   }
 }
 
+/** 打开沙箱收件箱，按当前填写的邮箱查询已投递的验证码邮件 */
 async function openSandbox() {
   if (!regForm.email) return ElMessage.warning('请先填写邮箱')
   sandboxVisible.value = true
@@ -191,6 +210,7 @@ async function openSandbox() {
   }
 }
 
+/** 提交登录：成功后保存 token 与用户信息，管理员进后台、普通用户回首页 */
 async function doLogin() {
   loading.value = true
   try {
@@ -205,6 +225,7 @@ async function doLogin() {
   }
 }
 
+/** 提交注册：成功后切回登录页，并自动回填刚注册的账号密码 */
 async function doRegister() {
   if (!regForm.code) return ElMessage.warning('请填写邮箱验证码')
   loading.value = true
@@ -259,6 +280,7 @@ onMounted(() => {
   }
 })
 
+// 卸载时清理全部入场动效补间（含背景邮戳），避免动效实例残留
 onUnmounted(() => {
   const els = [
     titleRef.value, cardRef.value, pinRef.value, loginBtnRef.value, regBtnRef.value, codeBtnRef.value,

@@ -30,6 +30,7 @@ HEADER = (
 
 
 def profile_path(user_id: int) -> str:
+    """画像文件路径：storage/profiles/user_{id}.md"""
     return os.path.join(PROFILE_DIR, f"user_{user_id}.md")
 
 
@@ -43,6 +44,7 @@ def read_profile(user_id: int) -> str:
 
 
 def _parse_sections(text: str) -> dict:
+    """解析画像 MD -> {小节名: [条目]}：识别 ## 小节标题，条目去掉日期前缀"""
     sections = {name: [] for name in SECTION_ORDER}
     current = None
     for line in (text or "").splitlines():
@@ -50,6 +52,7 @@ def _parse_sections(text: str) -> dict:
         if m:
             current = m.group(1).strip()
             continue
+        # 条目形如 "- 2026-01-01 内容"，去掉列表符与日期前缀只留事实文本
         item = re.sub(r"^-\s+(?:\d{4}-\d{2}-\d{2}\s+)?", "", line.strip())
         if current in sections and line.strip().startswith("-") and item:
             sections[current].append(item)
@@ -72,13 +75,15 @@ def record_note(user_id: int, category: str, note: str) -> dict:
     category 支持简称（偏好/预算/关注/习惯）或小节全名，未知归入"消费偏好"；
     与已有条目重复时不重复记录。返回 {ok, section, note, duplicated}。
     """
-    note = re.sub(r"\s+", " ", (note or "").strip())[:MAX_NOTE_LEN]
+    note = re.sub(r"\s+", " ", (note or "").strip())[:MAX_NOTE_LEN]  # 压缩空白并截断超长内容
     if not note:
         return {"ok": False, "error": "记录内容为空"}
+    # 类别映射：支持简称，未知类别归入「消费偏好」
     section = SECTIONS.get((category or "").strip()) or (
         category.strip() if category and category.strip() in SECTION_ORDER else "消费偏好"
     )
     text = read_profile(user_id)
+    # 去重：同内容条目（忽略日期前缀）已存在则不重复记录
     if re.search(r"(?m)^-\s+(?:\d{4}-\d{2}-\d{2}\s+)?" + re.escape(note) + r"\s*$", text):
         return {"ok": True, "section": section, "note": note, "duplicated": True}
     if not text.strip():
@@ -91,6 +96,7 @@ def record_note(user_id: int, category: str, note: str) -> dict:
             lines.append("")
         lines += [f"## {section}", "", f"- {note}", ""]
     else:
+        # 定位小节范围（下一个 ## 之前），新条目插到小节末尾的非空行后
         end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith("## ")), len(lines))
         item_idx = [i for i in range(start + 1, end) if lines[i].strip().startswith("- ")]
         drop = item_idx[0] if len(item_idx) >= MAX_ITEMS else None  # 超限丢最旧一条
@@ -114,7 +120,8 @@ def build_context(user_id: int) -> str:
     for name in SECTION_ORDER:
         items = sections.get(name) or []
         if items:
+            # 每节最多取 8 条，避免画像过长挤占对话上下文
             lines.append(f"- {name}：" + "；".join(items[:8]))
     if not lines:
         return ""
-    return "【用户画像】（历史对话自动整理）\n" + "\n".join(lines)[:800]
+    return "【用户画像】（历史对话自动整理）\n" + "\n".join(lines)[:800]  # 整体限 800 字

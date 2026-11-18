@@ -15,6 +15,7 @@ from conftest import make_listing, make_product, make_snapshot
 
 @pytest.fixture(autouse=True)
 def _reset_discover_cache():
+    """自动夹具：测试前后清空"全网新发现"缓存，避免用例间互相污染"""
     products_mod._discover_cache.update({"at": 0.0, "items": []})
     yield
     products_mod._discover_cache.update({"at": 0.0, "items": []})
@@ -39,6 +40,7 @@ def _seed_products(db):
 # ================= 搜索 =================
 
 def test_search_default_sort_no_filter(client, db):
+    """【正常流】默认排序无过滤搜索，返回全部商品与各自最低价"""
     _seed_products(db)
     r = client.get("/api/products/search", params={"sort": "default"})
     assert r.status_code == 200
@@ -55,24 +57,28 @@ def test_search_default_sort_no_filter(client, db):
 
 
 def test_search_keyword_filter(client, db):
+    """【正常流】按关键词过滤搜索只返回匹配商品"""
     _seed_products(db)
     r = client.get("/api/products/search", params={"keyword": "键盘"})
     assert r.json()["total"] == 1 and r.json()["items"][0]["name"] == "机械键盘B"
 
 
 def test_search_category_filter(client, db):
+    """【正常流】按分类过滤搜索只返回该分类商品"""
     _seed_products(db)
     r = client.get("/api/products/search", params={"category": "手机"})
     assert r.json()["total"] == 1
 
 
 def test_search_sort_random(client, db):
+    """【正常流】随机排序可正常返回全部商品"""
     _seed_products(db)
     r = client.get("/api/products/search", params={"sort": "random"})
     assert r.status_code == 200 and r.json()["total"] == 3
 
 
 def test_search_sort_newest(client, db):
+    """【正常流】最新排序按商品 id 倒序返回"""
     _seed_products(db)
     r = client.get("/api/products/search", params={"sort": "newest"})
     ids = [i["id"] for i in r.json()["items"]]
@@ -80,6 +86,7 @@ def test_search_sort_newest(client, db):
 
 
 def test_search_sort_price_asc_with_filters(client, db):
+    """【正常流】价格升序排序 + 关键词/分类过滤组合生效"""
     # 价格排序分支 + keyword/category 过滤条件均为真
     _seed_products(db)
     r = client.get("/api/products/search", params={
@@ -89,6 +96,7 @@ def test_search_sort_price_asc_with_filters(client, db):
 
 
 def test_search_sort_price_asc_no_filter(client, db):
+    """【正常流】价格升序无过滤时按最低价升序排列"""
     # 价格排序分支 + keyword/category 过滤条件均为假
     _seed_products(db)
     r = client.get("/api/products/search", params={"sort": "price_asc"})
@@ -97,6 +105,7 @@ def test_search_sort_price_asc_no_filter(client, db):
 
 
 def test_search_sort_price_desc(client, db):
+    """【正常流】价格降序按最低价降序排列"""
     # 三元表达式 price_asc ? asc : desc 的 desc 分支
     _seed_products(db)
     r = client.get("/api/products/search", params={"sort": "price_desc"})
@@ -105,6 +114,7 @@ def test_search_sort_price_desc(client, db):
 
 
 def test_search_pagination(client, db):
+    """【正常流】分页参数生效，第二页返回剩余商品"""
     _seed_products(db)
     r = client.get("/api/products/search", params={"sort": "newest", "page": 2, "page_size": 2})
     data = r.json()
@@ -112,11 +122,13 @@ def test_search_pagination(client, db):
 
 
 def test_search_page_size_limit_422(client):
+    """【异常流】page_size 超过上限被 schema 拦截返回 422"""
     r = client.get("/api/products/search", params={"page_size": 51})
     assert r.status_code == 422
 
 
 def test_search_zero_price_listing_min_price_none(client, db):
+    """【边界】最低价为 0 时按 falsy 处理返回 null"""
     # min(current_price) 为 0 -> falsy -> 返回 None 的条件分支
     p = make_product(db, name="零价商品", category="数码")
     make_listing(db, p, current_price=0.0)
@@ -127,6 +139,7 @@ def test_search_zero_price_listing_min_price_none(client, db):
 # ================= 分类（与慢慢买保持一致） =================
 
 def test_categories_matches_manmanbuy(client):
+    """分类接口返回与慢慢买一致的分类结构（含 cf 前缀编码）"""
     r = client.get("/api/products/categories")
     cats = r.json()
     names = {c["name"] for c in cats}
@@ -137,6 +150,7 @@ def test_categories_matches_manmanbuy(client):
 # ================= 实时慢慢买数据 =================
 
 def test_live_search_by_keyword(client, monkeypatch):
+    """【正常流】实时搜索按关键词返回商品类条目（mock 慢慢买发现接口）"""
     monkeypatch.setattr("app.services.crawler.manmanbuy.discover_products",
                         lambda keyword, limit=20: _fake_discover(keyword, limit))
     r = client.get("/api/products/live-search", params={"keyword": "手机", "n": 3})
@@ -147,6 +161,7 @@ def test_live_search_by_keyword(client, monkeypatch):
 
 
 def test_live_search_by_category_and_cache(client, monkeypatch):
+    """【正常流】实时搜索按分类返回优惠类条目，且第二次请求命中缓存不重复调爬虫"""
     calls = []
     items = [{"title": f"商品{i}", "price": 9.0, "platform": "京东商城",
               "url": f"https://cu.manmanbuy.com/discuxiao_{i}.aspx", "image": "",
@@ -166,6 +181,7 @@ def test_live_search_by_category_and_cache(client, monkeypatch):
 
 
 def test_live_product_detail(client, monkeypatch):
+    """【正常流】实时商品详情返回标题、历史最高/最低价与历史价列表"""
     fake = dict(_fake_query_history_ok("u"), deal_url="https://cu.manmanbuy.com/discuxiao_1.aspx",
                 site_name="京东", history_min=90.0, history_min_date="2026-01-01")
     monkeypatch.setattr("app.services.crawler.manmanbuy.live_product", lambda url, timeout_ms=0: fake)
@@ -177,6 +193,7 @@ def test_live_product_detail(client, monkeypatch):
 
 
 def test_live_product_invalid_url_400(client):
+    """【异常流】非法协议 URL 查询实时商品返回 400"""
     r = client.get("/api/products/live", params={"url": "javascript:alert(1)"})
     assert r.status_code == 400
 
@@ -184,6 +201,7 @@ def test_live_product_invalid_url_400(client):
 # ================= 全网新发现 =================
 
 def _fake_discover(keyword, limit=20):
+    """构造假的"全网新发现"爬虫返回数据（keyword 可选，便于 mock 替换）"""
     return [
         {"title": f"发现商品{i}", "price": 100.0 + i, "platform": "taobao",
          "url": f"https://new.example.com/{i}", "image": "", "keyword": keyword}
@@ -192,6 +210,7 @@ def _fake_discover(keyword, limit=20):
 
 
 def test_discover_first_call_and_dedup(client, db, monkeypatch):
+    """【正常流】首次发现走爬虫，过滤库中已有链接并按 n 截断"""
     # 首次调用走爬虫：缓存为空分支；命中已知 URL 被过滤；超过 20 条截断
     p = make_product(db)
     make_listing(db, p, url="https://new.example.com/0")
@@ -205,6 +224,7 @@ def test_discover_first_call_and_dedup(client, db, monkeypatch):
 
 
 def test_discover_cache_hit(client, monkeypatch):
+    """【正常流】第二次发现命中缓存不重复调爬虫，且按 n 截取条目"""
     calls = []
 
     def fake(keyword, limit=20):
@@ -219,6 +239,7 @@ def test_discover_cache_hit(client, monkeypatch):
 
 
 def test_discover_refresh_bypasses_cache(client, monkeypatch):
+    """【正常流】refresh=1 强制刷新，绕过缓存重新调爬虫"""
     calls = []
 
     def fake(keyword, limit=20):
@@ -234,6 +255,7 @@ def test_discover_refresh_bypasses_cache(client, monkeypatch):
 # ================= 链接收录 =================
 
 def _fake_query_history_ok(url, timeout_ms=0):
+    """构造假的慢慢买查询成功返回数据（含标题、历史价格、当前价）"""
     return {
         "title": "抓取到的商品", "image_url": "https://img.example.com/1.jpg",
         "history": [("2026-01-01", 90.0), ("2026-01-02", 95.0)],
@@ -242,11 +264,13 @@ def _fake_query_history_ok(url, timeout_ms=0):
 
 
 def test_import_invalid_url_400(client):
+    """【异常流】非法协议的链接收录返回 400"""
     r = client.post("/api/products/import", json={"url": "ftp://bad"})
     assert r.status_code == 400 and "链接不合法" in r.json()["detail"]
 
 
 def test_import_existing_returns_early(client, db):
+    """【正常流】已在库中的链接直接返回"已在库中"提示，不重复收录"""
     p = make_product(db)
     make_listing(db, p, url="https://item.jd.com/exist.html")
     r = client.post("/api/products/import", json={"url": "https://item.jd.com/exist.html"})
@@ -254,6 +278,7 @@ def test_import_existing_returns_early(client, db):
 
 
 def test_import_success_crawl_data_used(client, db, monkeypatch):
+    """【正常流】收录成功，标题/价格/平台取爬虫数据，历史价格入库"""
     # title/price/platform 全部取爬虫数据；历史价格入库
     monkeypatch.setattr("app.services.crawler.manmanbuy.live_product", _fake_query_history_ok)
     r = client.post("/api/products/import", json={"url": "https://item.jd.com/new1.html", "category": "手机"})
@@ -266,6 +291,7 @@ def test_import_success_crawl_data_used(client, db, monkeypatch):
 
 
 def test_import_body_fields_fallback(client, db, monkeypatch):
+    """【正常流】爬虫字段缺失时回退使用请求体自带的标题/价格与默认平台"""
     # 爬虫返回空 title/price/platform -> 使用 body.title/body.price/默认平台；
     # price=0 -> current_price 为 None 的条件分支
     def fake(url, timeout_ms=0):
@@ -286,6 +312,7 @@ def test_import_body_fields_fallback(client, db, monkeypatch):
 
 
 def test_import_crawl_fail_no_title_502(client, db, monkeypatch):
+    """【异常流】爬虫抛异常且无标题兜底时收录返回 502"""
     def fake(url, timeout_ms=0):
         raise RuntimeError("慢慢买超时")
 
@@ -295,6 +322,7 @@ def test_import_crawl_fail_no_title_502(client, db, monkeypatch):
 
 
 def test_import_crawl_fail_empty_title_502(client, db, monkeypatch):
+    """【异常流】爬虫成功但标题为空同样返回 502"""
     # 爬虫成功但标题为空 -> 同样 502（crawl_err 为空的报错分支）
     monkeypatch.setattr("app.services.crawler.manmanbuy.live_product",
                         lambda url, timeout_ms=0: {"title": "", "image_url": "", "history": [], "price": 1.0, "platform": "jd"})
@@ -303,6 +331,7 @@ def test_import_crawl_fail_empty_title_502(client, db, monkeypatch):
 
 
 def test_import_crawl_fail_with_body_title(client, db, monkeypatch):
+    """【正常流】爬虫失败但请求体带标题时仍收录成功，消息附查询错误后缀"""
     # 爬虫失败但 body.title 存在 -> 收录成功，message 带历史查询错误后缀
     def fake(url, timeout_ms=0):
         raise RuntimeError("解析失败")
@@ -318,6 +347,7 @@ def test_import_crawl_fail_with_body_title(client, db, monkeypatch):
 
 
 def test_import_removes_from_discover_cache(client, db, monkeypatch):
+    """【正常流】收录后将对应链接从"全网新发现"缓存中移除"""
     products_mod._discover_cache["items"] = [{"url": "https://item.jd.com/new6.html", "title": "x"}]
     monkeypatch.setattr("app.services.crawler.manmanbuy.live_product", _fake_query_history_ok)
     r = client.post("/api/products/import", json={"url": "https://item.jd.com/new6.html"})
@@ -326,6 +356,7 @@ def test_import_removes_from_discover_cache(client, db, monkeypatch):
 
 
 def test_import_with_history_skips_crawl(client, db, monkeypatch):
+    """【正常流】请求体已带历史价时直接落库，不再触发爬虫"""
     # 实时详情已拿到历史价 -> 直接落库，不再触发爬虫
     def boom(url, timeout_ms=0):
         raise AssertionError("不应触发爬虫")
@@ -346,6 +377,7 @@ def test_import_with_history_skips_crawl(client, db, monkeypatch):
 # ================= 商品详情 =================
 
 def test_detail_ok(client, db):
+    """【正常流】商品详情返回最低价与各链接近期快照（时间升序）"""
     p1, _, _ = _seed_products(db)
     r = client.get(f"/api/products/{p1.id}")
     assert r.status_code == 200
@@ -356,6 +388,7 @@ def test_detail_ok(client, db):
 
 
 def test_detail_404(client, db):
+    """【异常流】不存在的商品详情返回 404"""
     r = client.get("/api/products/99999")
     assert r.status_code == 404 and "商品不存在" in r.json()["detail"]
 
@@ -363,23 +396,27 @@ def test_detail_404(client, db):
 # ================= 实时价格查询 =================
 
 def test_realtime_invalid_url_400(client):
+    """【异常流】非法协议 URL 实时查询返回 400"""
     r = client.post("/api/products/realtime", json={"url": "javascript:alert(1)"})
     assert r.status_code == 400 and "合法" in r.json()["detail"]
 
 
 def test_realtime_crawl_exception_502(client, monkeypatch):
+    """【异常流】采集过程抛异常时实时查询返回 502"""
     monkeypatch.setattr(products_mod, "realtime_crawl", lambda url: (_ for _ in ()).throw(RuntimeError("页面打不开")))
     r = client.post("/api/products/realtime", json={"url": "https://item.jd.com/x.html"})
     assert r.status_code == 502 and "采集失败" in r.json()["detail"]
 
 
 def test_realtime_crawl_none_502(client, monkeypatch):
+    """【异常流】采集结果为空（未解析出价格）时返回 502"""
     monkeypatch.setattr(products_mod, "realtime_crawl", lambda url: None)
     r = client.post("/api/products/realtime", json={"url": "https://item.jd.com/x.html"})
     assert r.status_code == 502 and "未能从页面解析出价格" in r.json()["detail"]
 
 
 def test_realtime_success_full_fields(client, monkeypatch):
+    """【正常流】实时查询成功返回价格、标题与采集时间"""
     monkeypatch.setattr(products_mod, "realtime_crawl", lambda url: {
         "platform": "jd", "title": "实时商品", "price": 123.4, "image_url": "https://img/1.jpg",
     })
@@ -389,6 +426,7 @@ def test_realtime_success_full_fields(client, monkeypatch):
 
 
 def test_realtime_success_missing_optional_fields(client, monkeypatch):
+    """【边界】可选字段 title/image_url 缺省时返回空串"""
     # title/image_url 缺省 -> .get 默认空串分支
     monkeypatch.setattr(products_mod, "realtime_crawl", lambda url: {"platform": "web", "price": 9.9})
     r = client.post("/api/products/realtime", json={"url": "https://other.example.com/x"})
@@ -397,6 +435,7 @@ def test_realtime_success_missing_optional_fields(client, monkeypatch):
 
 
 def test_realtime_url_schema_422(client):
+    """【异常流】URL 长度不足被 schema 约束拦截返回 422"""
     # RealtimeCrawlIn 长度约束
     r = client.post("/api/products/realtime", json={"url": "short"})
     assert r.status_code == 422
@@ -405,6 +444,7 @@ def test_realtime_url_schema_422(client):
 # ================= 爬虫核心：平台识别与采集调度（crawler/core.py） =================
 
 def test_detect_platform_variants():
+    """覆盖各平台 URL 的平台识别：京东/淘宝/拼多多/当当/苏宁/唯品会/亚马逊/通用站点"""
     from app.services.crawler import core as crawler_core
 
     cases = {
@@ -425,6 +465,7 @@ def test_detect_platform_variants():
 
 
 def test_fetch_price_generic_first(monkeypatch):
+    """【正常流】通用采集器优先命中，并补全 platform/history 可选字段"""
     from app.services.crawler import core as crawler_core
 
     monkeypatch.setattr("app.services.crawler.generic.fetch",
@@ -436,6 +477,7 @@ def test_fetch_price_generic_first(monkeypatch):
 
 
 def test_fetch_price_falls_through_to_manmanbuy(monkeypatch):
+    """【正常流】平台采集器失败后顺延使用慢慢买兜底采集"""
     from app.services.crawler import core as crawler_core
 
     monkeypatch.setattr("app.services.crawler.jd.fetch",
@@ -446,6 +488,7 @@ def test_fetch_price_falls_through_to_manmanbuy(monkeypatch):
 
 
 def test_fetch_price_all_failed_raises(monkeypatch):
+    """【异常流】所有采集器均失败时汇总各错误信息抛出"""
     from app.services.crawler import core as crawler_core
 
     def boom(name):
@@ -461,6 +504,7 @@ def test_fetch_price_all_failed_raises(monkeypatch):
 
 
 def test_fetch_price_empty_result_counts_as_error(monkeypatch):
+    """【边界】采集返回空结果视作失败，最终抛出异常"""
     from app.services.crawler import core as crawler_core
 
     monkeypatch.setattr("app.services.crawler.generic.fetch", lambda url: {})
@@ -471,6 +515,7 @@ def test_fetch_price_empty_result_counts_as_error(monkeypatch):
 
 
 def test_realtime_crawl_dispatch(monkeypatch):
+    """【正常流】实时采集调度按 URL 平台分发到对应采集器"""
     from app.services.crawler import core as crawler_core
 
     monkeypatch.setattr("app.services.crawler.generic.fetch", lambda url: {"price": 5.5})

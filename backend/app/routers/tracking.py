@@ -1,3 +1,4 @@
+"""价格追踪路由：追踪订阅管理、价格走势查询与降价提醒（站内消息）"""
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -16,6 +17,7 @@ MAX_TRACK_PER_USER = 30  # REQ-SPT-305 每用户追踪上限
 
 
 def _product_current_price(db: Session, product_id: int):
+    """查询商品在所有平台报价中的当前最低价（保留两位小数）"""
     v = (
         db.query(func.min(Listing.current_price))
         .filter(Listing.product_id == product_id)
@@ -37,6 +39,7 @@ def add_tracking(
         .filter(Tracking.user_id == user.id, Tracking.product_id == body.product_id)
         .first()
     )
+    # 已在追踪中：仅更新目标价并投递调整通知，不重复创建记录
     if exists:
         if body.target_price is not None:
             exists.target_price = body.target_price
@@ -55,6 +58,7 @@ def add_tracking(
             db.commit()
         return {"ok": True, "message": "该商品已在追踪中，目标价已更新"}
     count = db.query(Tracking).filter(Tracking.user_id == user.id).count()
+    # 超出每用户追踪上限（REQ-SPT-305）直接拒绝
     if count >= MAX_TRACK_PER_USER:
         raise HTTPException(400, f"追踪商品数量已达上限（{MAX_TRACK_PER_USER} 个）")
     if body.target_price is not None and body.target_price <= 0:
@@ -82,6 +86,7 @@ def add_tracking(
 
 @router.get("")
 def list_trackings(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """我的追踪列表：附带商品图与当前最低价，按订阅时间倒序"""
     rows = (
         db.query(Tracking, Product)
         .join(Product, Tracking.product_id == Product.id)
@@ -107,9 +112,11 @@ def list_trackings(user: User = Depends(get_current_user), db: Session = Depends
 def remove_tracking(
     tracking_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)
 ):
+    """删除追踪记录（仅本人或管理员可操作）"""
     t = db.query(Tracking).get(tracking_id)
     if t is None:
         raise HTTPException(404, "追踪记录不存在")
+    # 越权校验：非本人且非管理员一律拒绝
     if t.user_id != user.id and user.role != "admin":
         raise HTTPException(403, "无权操作他人追踪记录")
     db.delete(t)
@@ -140,6 +147,7 @@ def trend(
     rows = q.order_by(PriceSnapshot.captured_at.asc()).all()
 
     daily = {}  # date -> (min_price, platform)
+    # 同一天多个快照只保留最低价（及其来源平台）
     for snap, plat in rows:
         d = snap.captured_at.strftime("%Y-%m-%d")
         if d not in daily or snap.price < daily[d][0]:
@@ -192,6 +200,7 @@ def my_alerts(
 def mark_read(
     alert_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)
 ):
+    """标记单条降价提醒为已读（仅限本人消息）"""
     a = db.query(Alert).get(alert_id)
     if a and a.user_id == user.id:
         a.is_read = True
@@ -201,6 +210,7 @@ def mark_read(
 
 @router.post("/alerts/read-all")
 def mark_all_read(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """一键将当前用户的全部降价提醒标记为已读"""
     db.query(Alert).filter(Alert.user_id == user.id, Alert.is_read == False).update(  # noqa: E712
         {"is_read": True}
     )

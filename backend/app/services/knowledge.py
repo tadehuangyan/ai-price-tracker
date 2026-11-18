@@ -42,13 +42,16 @@ def retrieve(db: Session, query: str, limit: int = 3):
         return [], []
     tokens = _tokens(query)
     scored = []
+    # 逐条打分（零外部依赖的轻量混合检索：关键词召回 + 加权重排）
     for a in db.query(KnowledgeArticle).filter(KnowledgeArticle.enabled.is_(True)).all():
         score = 0
+        # tags 命中为强信号：条目预置关键词直接出现在查询中加 5 分
         for tag in [t.strip() for t in (a.tags or "").split(",") if t.strip()]:
             if tag and tag.lower() in query.lower():
                 score += 5
         title = (a.title or "").lower()
         content = (a.content or "").lower()
+        # 2-gram/单词命中加权：标题命中（+2）比正文命中（+1）更能代表主题相关
         for tok in tokens:
             if tok in title:
                 score += 2
@@ -56,8 +59,10 @@ def retrieve(db: Session, query: str, limit: int = 3):
                 score += 1
         if score >= MIN_SCORE:
             scored.append((score, a))
+    # 得分降序，同分按 id 稳定排序，取 top-N
     scored.sort(key=lambda x: (-x[0], x[1].id))
     picked = [a for _, a in scored[:limit]]
+    # 上下文正文截断注入 Prompt；来源列表供回答标注【来源：Kx】与前端展示
     contexts = [
         f"【知识库 K{a.id}｜{a.title}】\n{(a.content or '')[:CONTENT_LIMIT]}"
         for a in picked

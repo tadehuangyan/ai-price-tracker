@@ -1,3 +1,8 @@
+/**
+ * 后台管理页（馆务）：以九个页签覆盖统计概览、数据源、采集任务、用户、
+ * 敏感词、知识库（RAG）、系统日志、模拟邮件记录与系统配置的管理。
+ * 各管理区均支持筛选/分页与增删改操作，数据变更后同步刷新统计与滚动动效。
+ */
 <template>
   <div class="page" ref="pageEl">
     <div class="page-head">
@@ -472,6 +477,7 @@
       </el-tab-pane>
     </el-tabs>
 
+    <!-- 邮件详情弹窗：查看模拟投递邮件正文 -->
     <el-dialog v-model="mailDetailVisible" :title="mailDetail?.subject || '邮件详情'" width="560px">
       <div class="muted" style="margin-bottom: 8px">
         收件人：{{ mailDetail?.to_email }} · 时间：{{ mailDetail?.created_at }} · 状态：模拟投递（sent）
@@ -487,11 +493,14 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import api, { errMsg } from '../api'
 import { countUp, magnetic, refreshScroll, revealOnScroll, splitReveal } from '../anim'
 
+// 当前管理页签：stats / sources / tasks / users / words / knowledge / logs / mails / config
 const tab = ref('stats')
 
 // ---- 统计 ----
+// 全站统计概览（商品/链接/快照/用户/追踪/提醒/采集任务等计数）
 const stats = ref<any>({})
 const loadingStats = ref(false)
+// 拉取统计概览数据
 async function loadStats() {
   loadingStats.value = true
   try {
@@ -505,17 +514,21 @@ async function loadStats() {
 }
 
 // ---- 数据源 ----
+// 数据源列表（平台标识/启用状态/采集频率/采集规则）
 const sources = ref<any[]>([])
 const loadingSources = ref(false)
+// 拉取数据源配置列表
 async function loadSources() {
   loadingSources.value = true
   const { data } = await api.get('/api/admin/datasources')
   sources.value = data
   loadingSources.value = false
 }
+// 开关切换启用状态（转调 saveSource 提交）
 async function toggleSource(row: any, v: boolean) {
   await saveSource(row, { enabled: v })
 }
+/** 保存数据源：按 patch 合并字段后整体提交，成功后同步行内状态 */
 async function saveSource(row: any, patch: any) {
   try {
     await api.post('/api/admin/datasources', {
@@ -534,9 +547,12 @@ async function saveSource(row: any, patch: any) {
 }
 
 // ---- 任务 ----
+// 采集任务分页数据
 const tasks = ref<any>({ items: [], total: 0, page: 1, page_size: 20 })
+// 任务状态筛选（全部/成功/失败/已暂停）
 const taskStatus = ref('')
 const loadingTasks = ref(false)
+// 按当前筛选条件分页拉取采集任务
 async function loadTasks(page = 1) {
   loadingTasks.value = true
   try {
@@ -546,6 +562,7 @@ async function loadTasks(page = 1) {
     loadingTasks.value = false
   }
 }
+/** 手动执行一次采集任务，按返回结果提示成功/失败并刷新列表 */
 async function runTask(row: any) {
   try {
     const { data } = await api.post(`/api/admin/tasks/${row.id}/run`)
@@ -556,6 +573,7 @@ async function runTask(row: any) {
     ElMessage.error(errMsg(e))
   }
 }
+// 任务暂停/恢复等简单操作的通用 POST 封装，成功后刷新任务列表
 async function post(url: string) {
   try {
     await api.post(url)
@@ -565,15 +583,19 @@ async function post(url: string) {
     ElMessage.error(errMsg(e))
   }
 }
+// 任务状态 -> 标签色 / 中文文案
 const statusType = (s: string) =>
   ({ success: 'success', failed: 'danger', running: 'primary', paused: 'warning' } as any)[s] || 'info'
 const statusText = (s: string) =>
   ({ success: '成功', failed: '失败', running: '执行中', paused: '已暂停', pending: '待执行' } as any)[s] || s
 
 // ---- 用户 ----
+// 用户分页数据
 const users = ref<any>({ items: [], total: 0, page: 1, page_size: 20 })
+// 用户搜索关键词（用户名/邮箱）
 const userKeyword = ref('')
 const loadingUsers = ref(false)
+// 按关键词分页拉取用户列表
 async function loadUsers(page = 1) {
   loadingUsers.value = true
   try {
@@ -583,6 +605,7 @@ async function loadUsers(page = 1) {
     loadingUsers.value = false
   }
 }
+// 切换用户启用/禁用状态并同步行内显示
 async function toggleUser(row: any) {
   const next = row.status === 'active' ? 'disabled' : 'active'
   try {
@@ -595,16 +618,25 @@ async function toggleUser(row: any) {
 }
 
 // ---- 敏感词 ----
+// 敏感词分页数据
 const words = ref<any>({ items: [], total: 0, page: 1, page_size: 20 })
+// 敏感词搜索关键词
 const wordKeyword = ref('')
 const loadingWords = ref(false)
+// 新增敏感词弹窗可见性
 const wordDialog = ref(false)
+// 新增敏感词表单
 const newWord = ref({ word: '', category: '' })
+// 批量导入弹窗可见性
 const batchDialog = ref(false)
+// 批量导入文本（每行一个词）
 const batchText = ref('')
+// 批量导入的统一分类（缺省"通用"）
 const batchCategory = ref('')
+// 批量导入按钮加载态
 const importing = ref(false)
 
+// 按关键词分页拉取敏感词列表
 async function loadWords(page = 1) {
   loadingWords.value = true
   try {
@@ -616,15 +648,18 @@ async function loadWords(page = 1) {
     loadingWords.value = false
   }
 }
+// 打开新增敏感词弹窗并重置表单
 function openWordDialog() {
   newWord.value = { word: '', category: '' }
   wordDialog.value = true
 }
+// 打开批量导入弹窗并清空上次输入
 function openBatchDialog() {
   batchText.value = ''
   batchCategory.value = ''
   batchDialog.value = true
 }
+/** 新增单个敏感词（分类缺省"通用"），成功后关闭弹窗并回到第一页 */
 async function addWord() {
   const word = newWord.value.word.trim()
   if (!word) {
@@ -643,6 +678,7 @@ async function addWord() {
     ElMessage.error(errMsg(e))
   }
 }
+/** 批量导入敏感词（每行一个），提示新增/跳过计数后刷新列表 */
 async function batchImport() {
   const text = batchText.value.trim()
   if (!text) {
@@ -664,6 +700,7 @@ async function batchImport() {
     importing.value = false
   }
 }
+// 删除单个敏感词并刷新当前页
 async function removeWord(row: any) {
   try {
     await api.delete(`/api/admin/sensitive-words/${row.id}`)
@@ -675,19 +712,26 @@ async function removeWord(row: any) {
 }
 
 // ---- 知识库（RAG） ----
+// 知识条目分页数据（供 AI 导购检索增强）
 const knowledge = ref<any>({ items: [], total: 0, page: 1, page_size: 20 })
+// 知识库搜索关键词（标题/内容）
 const knowledgeKeyword = ref('')
 const loadingKnowledge = ref(false)
+// 知识新增/编辑弹窗可见性
 const knowledgeDialog = ref(false)
+// 正在编辑的知识条目 id（null 表示新增）
 const knowledgeEditingId = ref<number | null>(null)
+// 知识条目表单
 const knowledgeForm = ref({ title: '', category: '', tags: '', content: '', enabled: true })
 
+// 把逗号分隔的标签串拆成数组（供标签列渲染）
 const splitTags = (tags: any): string[] =>
   String(tags || '')
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean)
 
+// 按关键词分页拉取知识条目
 async function loadKnowledge(page = 1) {
   loadingKnowledge.value = true
   try {
@@ -699,11 +743,13 @@ async function loadKnowledge(page = 1) {
     loadingKnowledge.value = false
   }
 }
+// 打开新增弹窗：清空编辑 id 并重置表单
 function openKnowledgeDialog() {
   knowledgeEditingId.value = null
   knowledgeForm.value = { title: '', category: '', tags: '', content: '', enabled: true }
   knowledgeDialog.value = true
 }
+// 打开编辑弹窗：记录 id 并回填行数据
 function editKnowledge(row: any) {
   knowledgeEditingId.value = row.id
   knowledgeForm.value = {
@@ -715,6 +761,7 @@ function editKnowledge(row: any) {
   }
   knowledgeDialog.value = true
 }
+/** 保存知识条目：校验必填后按有无编辑 id 分流为新增/编辑，编辑留在当前页 */
 async function saveKnowledge() {
   const form = knowledgeForm.value
   const title = form.title.trim()
@@ -745,6 +792,7 @@ async function saveKnowledge() {
     ElMessage.error(errMsg(e))
   }
 }
+/** 删除知识条目（先弹确认框，取消则中止） */
 async function removeKnowledge(row: any) {
   try {
     await ElMessageBox.confirm('确定删除该知识条目吗？', '提示', {
@@ -765,9 +813,12 @@ async function removeKnowledge(row: any) {
 }
 
 // ---- 日志 ----
+// 系统日志分页数据
 const logs = ref<any>({ items: [], total: 0, page: 1, page_size: 30 })
+// 日志级别筛选（全部/INFO/ERROR）
 const logLevel = ref('')
 const loadingLogs = ref(false)
+// 按级别分页拉取系统日志
 async function loadLogs(page = 1) {
   loadingLogs.value = true
   try {
@@ -779,12 +830,18 @@ async function loadLogs(page = 1) {
 }
 
 // ---- 模拟邮件记录 ----
+// 邮件记录分页数据（沙箱模拟投递）
 const mails = ref<any>({ items: [], total: 0, page: 1, page_size: 20 })
+// 邮件类别筛选（验证码/降价提醒/订阅确认/系统通知）
 const mailCategory = ref('')
+// 邮件搜索关键词（收件人/主题）
 const mailKeyword = ref('')
 const loadingMails = ref(false)
+// 邮件详情弹窗可见性
 const mailDetailVisible = ref(false)
+// 当前查看的邮件
 const mailDetail = ref<any>(null)
+// 按类别与关键词分页拉取邮件记录
 async function loadMails(page = 1) {
   loadingMails.value = true
   try {
@@ -796,20 +853,24 @@ async function loadMails(page = 1) {
     loadingMails.value = false
   }
 }
+// 打开邮件详情弹窗
 function viewMail(row: any) {
   mailDetail.value = row
   mailDetailVisible.value = true
 }
 
 // ---- 配置 ----
+// 系统配置项列表（键值对 + 说明）
 const configs = ref<any[]>([])
 const loadingConfig = ref(false)
+// 拉取系统配置
 async function loadConfig() {
   loadingConfig.value = true
   const { data } = await api.get('/api/admin/config')
   configs.value = data
   loadingConfig.value = false
 }
+// 保存单个配置项
 async function saveConfig(row: any) {
   try {
     await api.put('/api/admin/config', { key: row.key, value: row.value })
@@ -832,9 +893,11 @@ onMounted(() => {
 })
 
 // ================= 标本手记 · 动效（纯表现层，不改动上方业务逻辑） =================
+// 动效挂载点：页根 / 标题
 const pageEl = ref<HTMLElement>()
 const titleEl = ref<HTMLElement>()
 
+// 统计数字滚动动画（数据变化后重播新增节点）
 function runCounts() {
   pageEl.value?.querySelectorAll<HTMLElement>('[data-count]').forEach((el) => countUp(el))
 }

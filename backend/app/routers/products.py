@@ -1,3 +1,7 @@
+"""商品价格查询路由：站内商品搜索/详情、慢慢买实时数据、全网发现与商品收录
+
+实时数据均通过慢慢买爬取，配合同款缓存与 stale-while-revalidate 策略降低等待。
+"""
 from datetime import datetime
 
 import threading
@@ -16,6 +20,7 @@ router = APIRouter(prefix="/api/products", tags=["商品价格查询"])
 
 
 def _product_min_price(db: Session, product_id: int) -> float:
+    """查询商品在所有平台报价中的最低价（保留两位小数）"""
     v = (
         db.query(func.min(Listing.current_price))
         .filter(Listing.product_id == product_id)
@@ -25,6 +30,7 @@ def _product_min_price(db: Session, product_id: int) -> float:
 
 
 def _product_out(db: Session, p: Product) -> dict:
+    """组装商品出参：基础字段 + 最低价 + 各平台报价列表"""
     d = ProductOut.model_validate(p).model_dump(mode="json")
     d["min_price"] = _product_min_price(db, p.id)
     d["listings"] = [
@@ -63,6 +69,7 @@ def search(
     elif sort == "newest":
         q = q.order_by(Product.id.desc())
     elif sort in ("price_asc", "price_desc"):
+        # 价格排序需关联报价表按最低价分组，故单独走一套查询再手动序列化
         min_price = func.min(Listing.current_price).label("mp")
         q = (
             db.query(Product, min_price)
@@ -102,6 +109,7 @@ _refresh_lock = threading.Lock()
 
 
 def _mark_refreshing(key) -> bool:
+    """标记 key 正在后台刷新；已在刷新中则返回 False（防止并发重复爬取）"""
     with _refresh_lock:
         if key in _refreshing:
             return False
@@ -110,6 +118,7 @@ def _mark_refreshing(key) -> bool:
 
 
 def _done_refreshing(key) -> None:
+    """清除 key 的后台刷新标记"""
     with _refresh_lock:
         _refreshing.discard(key)
 
@@ -282,11 +291,13 @@ def discover(
 
 
 class HistoryPoint(BaseModel):
+    """历史价格点：日期 + 当日价格"""
     date: str = Field(max_length=10)
     price: float
 
 
 class ImportIn(BaseModel):
+    """商品收录入参：链接、标题/图片/价格等可选字段，history 为历史价格序列"""
     url: str = Field(min_length=8, max_length=500)
     title: str = Field(default="", max_length=255)
     price: float | None = None
@@ -332,7 +343,7 @@ def import_product(body: ImportIn, db: Session = Depends(get_db)):
 
     product = Product(name=title, category=body.category, image_url=image)
     db.add(product)
-    db.flush()
+    db.flush()  # 提前刷盘以取得自增 id，供下方 listing 引用
     listing = Listing(
         product_id=product.id,
         platform=platform,
@@ -344,6 +355,7 @@ def import_product(body: ImportIn, db: Session = Depends(get_db)):
     db.add(listing)
     db.flush()
     points = 0
+    # 历史价格按日期补 12:00 时间点写入快照，保持时间轴均匀
     for date_str, p in history:
         snap_time = datetime.strptime(date_str + " 12:00:00", "%Y-%m-%d %H:%M:%S")
         db.add(PriceSnapshot(listing_id=listing.id, price=p, captured_at=snap_time))

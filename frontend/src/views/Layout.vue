@@ -1,3 +1,7 @@
+/**
+ * 全局布局壳：顶栏（品牌 / 降价提醒铃铛 / 用户菜单）+ 侧栏导航 + 主内容区。
+ * 负责提醒未读数的拉取与已读联动，以及路由页面的过渡动效编排。
+ */
 <template>
   <el-container class="layout">
     <!-- ============ 标本馆顶栏 ============ -->
@@ -117,6 +121,7 @@
           <el-button size="small" @click="readAll">全部已读</el-button>
         </div>
         <el-empty v-if="!alerts.length" description="暂无采集记录" />
+        <!-- 提醒条目循环：点击单条即标记已读，红点/红字表示未读 -->
         <div v-for="(a, i) in alerts" :key="a.id" class="alert-item" @click="markRead(a)">
           <div class="alert-top">
             <span class="kicker">No.{{ String(alerts.length - i).padStart(3, '0') }}</span>
@@ -143,13 +148,19 @@ const router = useRouter()
 const route = useRoute()
 const auth = useAuthStore()
 
+// 侧栏菜单高亮项：取路由一级路径与菜单 index 匹配
 const active = computed(() => '/' + (route.path.split('/')[1] || ''))
+// 头像占位文字：昵称/用户名首字
 const avatarText = computed(() => (auth.user?.nickname || auth.user?.username || '?').slice(0, 1))
 
+// 降价提醒抽屉的可见性
 const alertDrawer = ref(false)
+// 降价提醒（采集记录）列表
 const alerts = ref<any[]>([])
+// 未读提醒数：驱动铃铛角标与摇铃动效
 const unread = computed(() => alerts.value.filter((a) => !a.is_read).length)
 
+// 拉取降价提醒列表（未登录时跳过；接口失败静默，不影响布局渲染）
 async function loadAlerts() {
   if (!auth.isLogin) return
   try {
@@ -163,16 +174,19 @@ function openAlerts() {
   alertDrawer.value = true
   loadAlerts()
 }
+// 点击单条提醒 -> 标记已读（已读的不再重复请求）
 async function markRead(a: any) {
   if (a.is_read) return
   await api.post(`/api/tracking/alerts/${a.id}/read`)
   a.is_read = true
 }
+// 一键全部标记已读：服务端批量置读后同步本地状态
 async function readAll() {
   await api.post('/api/tracking/alerts/read-all')
   alerts.value.forEach((a) => (a.is_read = true))
   ElMessage.success('已全部标记为已读')
 }
+// 用户下拉命令分发：退出登录 / 进入系统管理 / 进入个人中心
 function onUserCmd(cmd: string) {
   if (cmd === 'logout') {
     auth.logout()
@@ -183,10 +197,14 @@ function onUserCmd(cmd: string) {
 onMounted(loadAlerts)
 
 /* ================= 动效编排（仅动效，不涉及业务逻辑） ================= */
+// 品牌标题 DOM：入场拆字动效挂载点
 const brandRef = ref<HTMLElement | null>(null)
+// 侧栏图钉 DOM：按压动效挂载点
 const platePinRef = ref<HTMLElement | null>(null)
+// 抽屉内容容器 DOM：提醒条目入场动效的作用域
 const drawerBodyRef = ref<HTMLElement | null>(null)
 
+// 抽屉打开后对提醒条目做逐条上浮入场（尊重 reduced-motion 设置）
 function playDrawerStagger() {
   const items = drawerBodyRef.value?.querySelectorAll<HTMLElement>('.alert-item')
   if (!items || !items.length || reducedMotion) return
@@ -197,6 +215,7 @@ function playDrawerStagger() {
   )
 }
 
+// 抽屉打开时等 DOM 更新完毕再播放条目入场动效
 watch(alertDrawer, async (open) => {
   if (!open) return
   await nextTick()
@@ -208,6 +227,7 @@ onMounted(() => {
   pinPress(platePinRef.value, 0.6)
 })
 
+// 卸载时终止提醒条目的 GSAP 补间，避免动效实例残留
 onUnmounted(() => {
   const items = drawerBodyRef.value?.querySelectorAll<HTMLElement>('.alert-item')
   if (items && items.length) gsap.killTweensOf(Array.from(items))

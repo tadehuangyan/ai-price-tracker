@@ -53,14 +53,17 @@ class McpClient:
         self._send({"jsonrpc": "2.0", "method": "notifications/initialized"})
 
     def _next_id(self) -> int:
+        """生成递增的 JSON-RPC 请求 id（调用方须持有锁）"""
         self._id += 1
         return self._id
 
     def _send(self, msg: dict):
+        """向子进程 stdin 写入一行 JSON-RPC 消息（换行符定帧）"""
         self._proc.stdin.write(json.dumps(msg, ensure_ascii=False) + "\n")
         self._proc.stdin.flush()
 
     def _read(self) -> dict:
+        """从子进程 stdout 读取一行并解析为 JSON-RPC 消息"""
         line = self._proc.stdout.readline()
         if not line:
             raise McpError("MCP 服务端连接已关闭")
@@ -75,10 +78,12 @@ class McpClient:
             if resp.get("id") != mid:
                 continue  # 跳过乱序/通知消息
             if "error" in resp:
+                # JSON-RPC error 对象 -> 转成 McpError 由上层降级提示
                 raise McpError(resp["error"].get("message", "MCP 调用失败"))
             return resp.get("result", {})
 
     def request(self, method: str, params: dict = None) -> dict:
+        """线程安全的通用请求：加锁保证同一时刻只有一个在途请求，避免响应串包"""
         with self._lock:
             self._ensure()
             return self._request({
@@ -87,6 +92,7 @@ class McpClient:
             })
 
     def close(self):
+        """关闭子进程通道（关闭 stdin 触发服务端退出；忽略已关闭异常）"""
         with self._lock:
             if self._proc is not None and self._proc.poll() is None:
                 try:
@@ -98,11 +104,13 @@ class McpClient:
     # ---------- MCP 能力 ----------
 
     def list_tools(self) -> list:
+        """tools/list：返回服务端暴露的工具定义列表"""
         return self.request("tools/list").get("tools", [])
 
     def call_tool(self, name: str, arguments: dict) -> str:
         """调用 MCP 工具，返回文本结果；isError 时抛 McpError"""
         result = self.request("tools/call", {"name": name, "arguments": arguments})
+        # MCP 结果是 content 块列表，这里只拼接 type=text 的块
         text = "\n".join(
             c.get("text", "") for c in (result.get("content") or []) if c.get("type") == "text"
         )
@@ -111,12 +119,14 @@ class McpClient:
         return text
 
 
-mcp = McpClient()  # 模块级单例
+mcp = McpClient()  # 模块级单例（共用同一个 MCP 子进程）
 
 
 def call_tool(name: str, arguments: dict) -> str:
+    """模块级便捷入口：经单例客户端调用 MCP 工具"""
     return mcp.call_tool(name, arguments)
 
 
 def list_tools() -> list:
+    """模块级便捷入口：列出服务端工具"""
     return mcp.list_tools()

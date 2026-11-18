@@ -26,6 +26,7 @@ def hei(size):
 
 
 def arrowhead(d, x, y, dx, dy, L=12, a=0.45):
+    """在 (x, y) 处沿 (dx, dy) 方向绘制实心三角箭头"""
     ang = math.atan2(dy, dx)
     d.polygon([
         (x, y),
@@ -55,6 +56,7 @@ def wrap(d, text, font, maxw):
 # 软件结构框图
 # ======================================================================
 def arch_diagram():
+    """生成软件结构框图 arch.png（客户端层 / 服务端层 / 数据层 + 外部接口）"""
     W, H = 1640, 540
     img = Image.new("RGB", (W, H), WHITE)
     d = ImageDraw.Draw(img)
@@ -239,6 +241,7 @@ def flow(name, nodes, cx=270):
 # 各模块流程图
 # ======================================================================
 def flows():
+    """生成各业务模块流程图 flow_*.png（注册/登录/商品/追踪/对比/导购/调度）"""
     flow("flow_register.png", [
         ("s", "开始：用户填写用户名、密码、邮箱并提交注册"),
         ("p", "前端格式校验：用户名 3~20 位、密码 8~64 位、邮箱格式"),

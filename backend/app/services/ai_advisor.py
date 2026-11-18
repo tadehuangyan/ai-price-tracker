@@ -27,6 +27,11 @@ from . import agent_tools, knowledge, moderation, user_profile
 
 
 def build_context(db: Session, product_id: int, preference: str = "") -> dict:
+    """组装商品价格上下文：当前多平台报价 + 近一年日线统计（最低/最高/均价/分位/趋势）
+
+    同一天多次抓取取当天最低价聚合为日线；返回 dict 供 Prompt 拼装与工具调用复用，
+    商品不存在时抛 ValueError。
+    """
     product = db.query(Product).get(product_id)
     if product is None:
         raise ValueError("商品不存在")
@@ -49,6 +54,7 @@ def build_context(db: Session, product_id: int, preference: str = "") -> dict:
     )
     daily = {}
     for s in rows:
+        # 按天聚合：同一天多次抓取只保留当天最低价，得到日线序列
         d = s.captured_at.strftime("%Y-%m-%d")
         if d not in daily or s.price < daily[d]:
             daily[d] = s.price
@@ -106,6 +112,7 @@ def llm_chat(messages: list, temperature: float = 0.5, timeout: int = 60, json_m
         "temperature": temperature,
     }
     if json_mode:
+        # JSON mode：强制模型输出合法 JSON 对象（建议卡结构化输出用）
         payload["response_format"] = {"type": "json_object"}
     resp = httpx.post(
         f"{base.rstrip('/')}/chat/completions",
@@ -141,15 +148,16 @@ def llm_chat_stream(messages: list, temperature: float = 0.6, timeout: int = 90,
     ) as resp:
         resp.raise_for_status()
         for raw in resp.iter_bytes():
+            # 增量 UTF-8 解码：多字节字符可能被网络分块截断，需跨块拼接后再切行
             buf += decoder.decode(raw)
             while "\n" in buf:
                 line, buf = buf.split("\n", 1)
                 line = line.strip()
                 if not line.startswith("data:"):
-                    continue
+                    continue  # SSE 帧仅处理 data: 行，忽略注释/事件名行
                 data = line[5:].strip()
                 if data == "[DONE]":
-                    return
+                    return  # 流结束标记
                 try:
                     chunk = json.loads(data)
                 except ValueError:
@@ -216,6 +224,8 @@ def llm_stream_ex(messages: list, tools: list = None, temperature: float = 0.6, 
                 text = delta.get("content")
                 if text:
                     yield {"type": "text", "text": text}
+                # tool_calls 增量分片下发（id/name 只出现一次、arguments 分多段），
+                # 按 index 归位到对应槽位累积拼接
                 for tc in (delta.get("tool_calls") or []):
                     idx = tc.get("index", 0)
                     slot = acc.setdefault(idx, {"id": "", "name": "", "arguments": ""})
@@ -227,6 +237,7 @@ def llm_stream_ex(messages: list, tools: list = None, temperature: float = 0.6, 
                     if fn.get("arguments"):
                         slot["arguments"] += fn["arguments"]
     if acc:
+        # 整轮流结束后一次性 yield 完整的工具调用列表（按 index 排序保持模型给出的顺序）
         yield {"type": "tool_calls", "calls": [acc[i] for i in sorted(acc)]}
 
 
@@ -410,6 +421,7 @@ def fact_check_note(reply: str, contexts: list, user_text: str = "") -> str:
     unverified = []
     for m in PRICE_RE.finditer(reply):
         val = float(m.group(1))
+        # 白名单比对带 5% 容差（模型可能对数字做四舍五入/换算）
         if any(abs(val - w) <= max(abs(w) * 0.05, 0.01) for w in known):
             continue
         label = m.group(0)
@@ -448,6 +460,7 @@ ADVICE_SYSTEM = (
 
 
 def is_buy_question(message: str) -> bool:
+    """判断是否为『值不值得买』类购买决策问题（命中则额外产出结构化建议卡）"""
     return bool(BUY_Q_RE.search(message or ""))
 
 
@@ -462,8 +475,9 @@ def advice_card(db: Session, message: str, contexts: list, ai_config: dict = Non
     for _ in range(2):
         try:
             raw = llm_chat(msgs, temperature=0.2, timeout=40, json_mode=True, ai_config=ai_config)
-            data = json.loads(raw)
+            data = json.loads(raw)  # JSON 解析失败走 except 重试
             action = data.get("action")
+            # 字段裁剪与夹取：非法 action 退回 watch、confidence 限 [0,1]、文本截断防超长
             card = AdviceCard(
                 action=action if action in BUY_ACTIONS else "watch",
                 confidence=max(0.0, min(1.0, float(data.get("confidence", 0.5)))),
@@ -516,12 +530,14 @@ def chat_reply(
     )
 
     def _pack(reply: str, fallback: bool) -> dict:
+        # 事实核对：无法由数据佐证的价格数字追加提示（AI 安全）
         note = fact_check_note(reply, contexts, message)
         if note:
             reply += "\n\n" + note
         out = {"reply": reply, "contexts": contexts, "fallback": fallback}
         if sources:
             out["sources"] = sources
+        # 购买决策问题额外产出结构化建议卡
         if contexts and is_buy_question(message):
             card = advice_card(db, message, contexts, ai_config)
             if card:
@@ -607,7 +623,9 @@ def chat_reply_stream(
                     continue
                 raise
             if not calls:
-                return
+                return  # 模型未请求工具 -> 已纯文本答完，结束循环
+            # 模型请求调用工具：先把 assistant 的 tool_calls 回填进对话历史，
+            # 保持 OpenAI Function Calling 的消息序列格式
             cur = cur + [{"role": "assistant", "tool_calls": [
                 {"id": c.get("id") or f"call_{_round}_{i}", "type": "function",
                  "function": {"name": c["name"], "arguments": c.get("arguments") or "{}"}}
@@ -615,6 +633,7 @@ def chat_reply_stream(
             for i, c in enumerate(calls):
                 name = c.get("name") or ""
                 yield {"kind": "tool", "name": name, "status": "running"}
+                # 白名单分发执行工具，失败以错误文本回填（不中断对话）
                 result = agent_tools.dispatch(db, user, name, c.get("arguments") or "{}")
                 try:
                     ok = not json.loads(result).get("error")
@@ -623,6 +642,7 @@ def chat_reply_stream(
                 yield {"kind": "tool", "name": name,
                        "status": "done" if ok else "failed",
                        "summary": agent_tools.summarize(name, result)}
+                # 工具结果以 tool 角色回填，截断 4000 字防止单条结果挤爆上下文
                 cur.append({"role": "tool",
                             "tool_call_id": c.get("id") or f"call_{_round}_{i}",
                             "content": result[:4000]})
@@ -656,6 +676,7 @@ def chat_reply_stream(
                     return
                 safe_end = len(buffer) - hold
                 if safe_end > sent_len:
+                    # 只放行已过检的前缀，尾部 hold 字符暂扣（可能与下一块拼成敏感词）
                     yield {"type": "delta", "text": buffer[sent_len:safe_end]}
                     sent_len = safe_end
                     emitted = True

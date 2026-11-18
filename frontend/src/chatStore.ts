@@ -1,9 +1,14 @@
+/**
+ * AI 导购聊天的会话/消息状态管理：提供多会话的创建、切换、删除，消息读写，
+ * 以及会话数据的 localStorage 持久化。
+ */
 import { computed, ref, watch } from 'vue'
 
 // ================= 多会话共享存储（模块级单例） =================
 // 会话状态放在模块级：路由切走导致组件销毁时，流式回复仍继续写入并落盘，
 // 切回页面实时续显，不再出现"切走即断"。
 
+// 购买建议卡数据：AI 结构化输出的购买动作、置信度、摘要与支撑依据
 export interface AdviceCardData {
   action: 'buy' | 'wait' | 'watch'
   confidence: number
@@ -11,6 +16,7 @@ export interface AdviceCardData {
   evidence: string[]
 }
 
+// 单条消息：正文之外可携带商品上下文、Agent 工具调用过程、建议卡与 RAG 引用来源等扩展信息
 export interface Msg {
   role: 'user' | 'assistant'
   content: string
@@ -27,6 +33,7 @@ export interface Msg {
   sources?: { id: number; title: string }[] // 知识库引用来源（RAG 溯源）
 }
 
+// 会话：一次对话的元信息（标题、时间）与完整消息列表
 export interface Session {
   id: string
   title: string
@@ -39,6 +46,7 @@ const SESSIONS_KEY = 'spt_advisor_sessions'
 const LEGACY_CHAT_KEY = 'spt_advisor_chat' // 旧版单会话存档（迁移用）
 export const MAX_SESSIONS = 20
 
+// 新会话开场白：引导用户发商品链接、收藏商品或直接提问
 const WELCOME_TEXT =
   '你好，我是 AI 智能导购。\n' +
   '· 发送商品链接，我会抓取它的历史价格帮你分析\n' +
@@ -64,6 +72,7 @@ function resetInterrupted(msgs: Msg[]) {
   }
 }
 
+/** 从 localStorage 恢复会话列表；无存档时尝试把旧版单会话数据迁移为首个历史会话 */
 function loadSessions(): Session[] {
   try {
     const raw = localStorage.getItem(SESSIONS_KEY)
@@ -89,14 +98,18 @@ function loadSessions(): Session[] {
   return []
 }
 
+// 全部会话列表；为空时初始化一个含欢迎语的默认会话
 export const sessions = ref<Session[]>(loadSessions())
 if (!sessions.value.length) {
   sessions.value = [makeSession([{ role: 'assistant', content: WELCOME_TEXT }])]
 }
+// 当前会话 ID，默认指向最近使用（列表末尾）的会话
 export const currentId = ref(sessions.value[sessions.value.length - 1]?.id || '')
+// 当前会话对象（按 currentId 查找，找不到时兜底为第一个会话）
 export const currentSession = computed(
   () => sessions.value.find((s) => s.id === currentId.value) || sessions.value[0]
 )
+// 当前会话的消息列表（可读写计算属性，写入时回写当前会话）
 export const messages = computed<Msg[]>({
   get: () => currentSession.value?.messages ?? [],
   set: (v) => {
@@ -104,6 +117,7 @@ export const messages = computed<Msg[]>({
   },
 })
 
+// 按最近活跃时间倒序的会话列表（侧边栏展示与超量淘汰排序使用）
 export const sortedSessions = computed(() =>
   [...sessions.value].sort((a, b) => b.updatedAt - a.updatedAt)
 )
@@ -118,6 +132,7 @@ export const sessionProductId = computed(() => {
   return null
 })
 
+// 是否正在发送/等待 AI 回复（用于禁用输入框、防止并发发送）
 export const sending = ref(false)
 
 // 持续落盘：模块级 watcher 不随组件销毁停止
@@ -133,6 +148,7 @@ watch(
   { deep: true }
 )
 
+/** 新建会话并置为当前；会话数超过上限时淘汰最久未活跃的非当前会话 */
 export function newChat() {
   if (!currentSession.value?.messages.length) return // 当前已是空会话
   const s = makeSession([])
@@ -150,6 +166,7 @@ export function switchSession(id: string) {
   currentId.value = id
 }
 
+/** 删除指定会话；删的是当前会话时自动切到剩余的第一个，且始终保留至少一个会话 */
 export function removeSession(id: string) {
   const idx = sessions.value.findIndex((s) => s.id === id)
   if (idx < 0) return
