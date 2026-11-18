@@ -1,3 +1,9 @@
+/**
+ * AI 智能导购页（研究员手记）：与大模型多轮对话，分析商品历史价格与购买时机。
+ * 支持粘贴商品链接/图片/文件附件、识图找同款、收藏商品快捷发送、语音输入，
+ * 回复以 SSE 流式渲染（含 Agent 工具调用过程、购买建议卡与知识库来源），
+ * 会话持久化在 chatStore 可随时切换历史对话。
+ */
 <template>
   <div class="page chat-page">
     <div class="card chat-card spec-card">
@@ -33,6 +39,7 @@
           <p class="muted">可直接粘贴商品链接 · 选择正在浏览的商品 · 点击下方追踪中的商品</p>
         </div>
 
+        <!-- 消息循环：用户=采集便签，AI=楷体批注条；AI 条内含加载态/商品卡/工具过程/建议卡/正文/来源 -->
         <div v-for="(m, i) in messages" :key="i" :class="['msg-row', m.role]">
           <img v-if="m.role === 'assistant'" class="avatar ai-avatar" src="/deco/ai-avatar.png" alt="AI" />
           <div :class="['bubble', m.role]">
@@ -161,6 +168,7 @@
               </template>
               <div class="plus-panel">
                 <div class="panel-title">标本工具箱 · 发送到对话</div>
+                <!-- 工具箱四项：图片 / 文件 / 识图找同款 / 收藏商品 -->
                 <div class="panel-grid">
                   <div class="panel-item" @click="pickFile('image')">
                     <div class="panel-icon img-icon"><el-icon :size="20"><Picture /></el-icon></div>
@@ -383,23 +391,34 @@ function toolLabel(name: string) {
   return TOOL_LABELS[name] || name || '调用工具'
 }
 
+// 输入框文本
 const input = ref('')
+// 消息滚动容器 DOM（发送/流式输出时自动滚到底）
 const bodyEl = ref<HTMLDivElement>()
+// 收藏（追踪）商品列表：面板中点击可直接发送分析
 const trackings = ref<any[]>([])
+// + 拓展面板可见性
 const panelVisible = ref(false)
+// 面板内收藏列表显隐
 const showFav = ref(false)
+// 隐藏的图片/文件选择框（面板按钮触发）
 const imgInput = ref<HTMLInputElement>()
 const fileInput = ref<HTMLInputElement>()
 const pendingImages = ref<string[]>([])  // dataURI
+// 待发送文件附件（已上传到服务端，带可访问 url）
 const pendingFiles = ref<{ name: string; url: string }[]>([])
 
 // ---- 语音输入（Web Speech API，浏览器原生中文听写，零后端依赖） ----
+// 语音听写进行中（驱动麦克风按钮样式）
 const listening = ref(false)
+// SpeechRecognition 实例（每次听写重建）
 let recognizer: any = null
+// 浏览器是否支持 Web Speech API
 const voiceSupported =
   typeof window !== 'undefined' &&
   !!((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition)
 
+/** 开关语音听写：中文识别结果追加到输入框（保留已有文本），再次点击停止 */
 function toggleVoice() {
   if (!voiceSupported) {
     ElMessage.warning('当前浏览器不支持语音输入，请使用 Chrome 或 Edge')
@@ -432,6 +451,7 @@ function toggleVoice() {
 }
 
 // ---- 识图找同款（多模态闭环：图片 -> 视觉识别 -> 候选商品 -> 一键分析） ----
+// 识图返回的候选商品：product_id 非空为本地库商品，否则为联网搜索结果
 interface VisionCandidate {
   product_id: number | null
   name: string
@@ -440,11 +460,16 @@ interface VisionCandidate {
   platform: string
   source: string
 }
+// 识图模式：下一次选图走视觉识别而不是加入附件
 const visionMode = ref(false)
+// 识图结果弹窗可见性
 const visionVisible = ref(false)
+// 识图请求进行中
 const visionLoading = ref(false)
+// 识图结果：识别关键词 + 候选商品列表
 const visionResult = ref<{ keywords: string; message?: string; candidates: VisionCandidate[] } | null>(null)
 
+/** 调用识图接口：图片转 base64 送视觉识别，返回关键词与候选商品并弹窗展示 */
 async function runImageSearch(images: string[]) {
   visionVisible.value = true
   visionLoading.value = true
@@ -473,6 +498,7 @@ async function runImageSearch(images: string[]) {
   }
 }
 
+// 候选商品 -> 以 [[product:N]] 占位符发起分析提问（无本地 id 则退化为按名称搜索）
 function pickCandidate(c: VisionCandidate) {
   visionVisible.value = false
   if (c.product_id) {
@@ -496,6 +522,7 @@ interface AiSetting {
   configs: AiModelCfg[]
 }
 const AI_CFG_KEY = 'spt_ai_setting'
+/** 从 localStorage 读取模型设置（兼容旧版单配置 spt_ai_config 格式，解析失败用默认） */
 function loadAiSetting(): AiSetting {
   try {
     const raw = localStorage.getItem(AI_CFG_KEY)
@@ -528,28 +555,37 @@ function loadAiSetting(): AiSetting {
   }
   return { mode: 'default', activeId: '', configs: [] }
 }
+// 生成配置 id（时间戳 + 随机串，仅本地使用）
 function newCfgId() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 6)
 }
+// 模型设置（localStorage 持久化，仅保存在本机浏览器）
 const aiSetting = ref<AiSetting>(loadAiSetting())
+// 模型设置弹窗可见性
 const settingsVisible = ref(false)
+// 当前编辑的配置 id
 const editId = ref(aiSetting.value.activeId || aiSetting.value.configs[0]?.id || '')
+// 当前编辑的配置对象（弹窗表单双向绑定它）
 const editingCfg = computed(() =>
   aiSetting.value.configs.find((c) => c.id === editId.value)
 )
+// 当前生效的自定义配置（activeId 失效时退回第一套）
 const activeCfg = computed(() => {
   const s = aiSetting.value
   return s.configs.find((c) => c.id === s.activeId) || s.configs[0]
 })
+// 头部模型标签文案
 const modelLabel = computed(() => {
   if (aiSetting.value.mode !== 'custom') return '默认模型'
   return activeCfg.value?.name || activeCfg.value?.model || '自定义模型'
 })
+// 新增一套空配置并进入编辑
 function addAiCfg() {
   const cfg: AiModelCfg = { id: newCfgId(), name: '', api_base: '', api_key: '', model: '' }
   aiSetting.value.configs.push(cfg)
   editId.value = cfg.id
 }
+// 删除当前编辑的配置并自动选中第一套
 function removeAiCfg() {
   const s = aiSetting.value
   const idx = s.configs.findIndex((c) => c.id === editId.value)
@@ -557,6 +593,7 @@ function removeAiCfg() {
   s.configs.splice(idx, 1)
   editId.value = s.configs[0]?.id || ''
 }
+/** 保存模型设置：自定义模式要求 api_base/api_key/model 齐全，写入 localStorage */
 function saveAiCfg() {
   const s = aiSetting.value
   if (s.mode === 'custom') {
@@ -576,6 +613,7 @@ function saveAiCfg() {
   settingsVisible.value = false
   ElMessage.success('模型设置已保存')
 }
+// 生成随请求发送的自定义模型配置（默认模式返回 null，走服务端默认模型）
 function currentAiConfig() {
   const s = aiSetting.value
   if (s.mode !== 'custom') return null
@@ -584,11 +622,15 @@ function currentAiConfig() {
     ? { api_base: cfg.api_base.trim(), api_key: cfg.api_key.trim(), model: cfg.model.trim() }
     : null
 }
+// 商品缺图时的兜底占位图
 const placeholder =
   'https://trae-api-cn.mchost.guru/api/ide/v1/text_to_image?prompt=minimal%20white%20product%20placeholder%20shopping%20bag&image_size=square'
 
+// 头像占位文字：昵称/用户名首字
 const avatarText = computed(() => (auth.user?.nickname || auth.user?.username || '?').slice(0, 1))
+// 可发送：正在发送，或已有文本/图片/文件附件
 const canSend = computed(() => sending.value || !!(input.value.trim() || pendingImages.value.length || pendingFiles.value.length))
+// 输入框占位文案随发送态 / 附件态联动
 const inputPlaceholder = computed(() =>
   sending.value
     ? 'AI 正在思考…'
@@ -601,6 +643,7 @@ function shortName(s: string, n = 10) {
   return s && s.length > n ? s.slice(0, n) + '…' : s || ''
 }
 
+// 消息区滚到底部（等 DOM 更新后执行）
 function scrollBottom() {
   nextTick(() => {
     if (bodyEl.value) bodyEl.value.scrollTop = bodyEl.value.scrollHeight
@@ -687,6 +730,11 @@ async function streamChat(
   return result
 }
 
+/**
+ * 发送用户消息并流式接收 AI 回复（核心链路）：
+ * 敏感词预检 -> 解析 [[product:N]] 商品卡片 -> 组装历史消息 ->
+ * SSE 流式渲染正文/工具过程/建议卡/来源 -> 违规拦截与降级兜底。
+ */
 async function pushUser(
   text: string,
   productId?: number,
@@ -843,6 +891,7 @@ async function pushUser(
 }
 
 // ---- + 拓展面板：图片 / 文件 / 识图 / 收藏商品 ----
+// 打开对应文件选择器；识图入口先置 visionMode，让选图走视觉识别
 function pickFile(kind: 'image' | 'file' | 'vision') {
   panelVisible.value = false
   showFav.value = false
@@ -854,6 +903,7 @@ function pickFile(kind: 'image' | 'file' | 'vision') {
   ;(kind === 'image' ? imgInput : fileInput).value?.click()
 }
 
+// 将图片文件读为 base64 DataURL（附件预览与识图接口共用）
 function readDataURL(f: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
@@ -863,6 +913,7 @@ function readDataURL(f: File): Promise<string> {
   })
 }
 
+// 上传文件到服务端，成功后加入待发送附件列表
 async function addPendingFile(f: File) {
   const fd = new FormData()
   fd.append('file', f)
@@ -887,6 +938,7 @@ function onImagePick(e: Event) {
   el.value = ''
 }
 
+// 图片转 DataURL 加入附件（限 8MB，超限跳过并提示）
 function addPendingImage(f: File) {
   if (f.size > 8 * 1024 * 1024) {
     ElMessage.warning(`图片 ${f.name || '剪贴板图片'} 超过 8MB，已跳过`)
@@ -895,6 +947,7 @@ function addPendingImage(f: File) {
   return readDataURL(f).then((url) => pendingImages.value.push(url))
 }
 
+// 文件选择回调：逐个上传并加入附件
 async function onFilePick(e: Event) {
   const el = e.target as HTMLInputElement
   for (const f of Array.from(el.files || [])) {
@@ -957,6 +1010,7 @@ function sendTracking(t: any) {
   pushUser(`[[product:${t.product_id}]] 这个商品现在值得买吗？`)
 }
 
+// 拉取收藏（追踪）列表（未登录等情况静默忽略）
 async function loadTrackings() {
   try {
     const { data } = await api.get('/api/tracking')
@@ -967,6 +1021,7 @@ async function loadTrackings() {
 }
 
 // ---- 历史对话：新建 / 切换 / 删除（状态在 chatStore，组件只管 UI） ----
+// 历史对话抽屉可见性
 const historyVisible = ref(false)
 
 function newChat() {

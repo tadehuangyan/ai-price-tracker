@@ -9,6 +9,10 @@
 </template>
 
 <script setup lang="ts">
+/**
+ * 根组件：只保留路由出口，为页面切换提供统一的淡入淡出过渡，
+ * 并在路由切换后刷新 ScrollTrigger，保证滚动入场动画在新页面正常触发。
+ */
 import { nextTick, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { refreshScroll } from './anim'
@@ -26,6 +30,7 @@ watch(
 </script>
 
 <style scoped>
+/* 路由切换过渡：离开时淡出上移，进入时淡入下移，配合 :duration 320ms */
 .app-fade-enter-active,
 .app-fade-leave-active {
   transition: opacity 0.3s ease, transform 0.3s ease;

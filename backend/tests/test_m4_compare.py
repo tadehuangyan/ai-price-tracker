@@ -31,6 +31,7 @@ def _seed(db):
 
 
 def test_compare_two_products_full(client, db):
+    """【正常流】双商品比价返回报价升序、最低价、差价与历史价序列"""
     p1, p2 = _seed(db)
     r = client.post("/api/compare", json={"product_ids": [p1.id, p2.id], "days": 365})
     assert r.status_code == 200
@@ -52,6 +53,7 @@ def test_compare_two_products_full(client, db):
 
 
 def test_compare_no_offers(client, db):
+    """【边界】全部报价无价时 offers 为空，各项统计为 null 或 0"""
     # 全部报价无价 -> offers 空：lowest None / diff 0 / current_min None / 历史统计 None
     p = make_product(db, name="无价商品", category="数码")
     make_listing(db, p, current_price=None)
@@ -63,18 +65,21 @@ def test_compare_no_offers(client, db):
 
 
 def test_compare_duplicates_400(client, db):
+    """【异常流】比价商品 id 重复返回 400"""
     p1, _ = _seed(db)
     r = client.post("/api/compare", json={"product_ids": [p1.id, p1.id]})
     assert r.status_code == 400 and "不能重复" in r.json()["detail"]
 
 
 def test_compare_missing_product_404(client, db):
+    """【异常流】比价包含不存在的商品返回 404"""
     p1, _ = _seed(db)
     r = client.post("/api/compare", json={"product_ids": [p1.id, 99999]})
     assert r.status_code == 404 and "99999" in r.json()["detail"]
 
 
 def test_compare_schema_limits_422(client, db):
+    """【异常流】空列表或超过 5 个商品在 schema 层被拦截返回 422"""
     # 空列表与超过 5 个在 schema 层被拦截（max_length=5 / min_length=1）
     p1, p2 = _seed(db)
     assert client.post("/api/compare", json={"product_ids": []}).status_code == 422
@@ -83,6 +88,7 @@ def test_compare_schema_limits_422(client, db):
 
 
 def test_compare_func_over_five_400(db):
+    """【异常流】绕过 schema 直接调视图函数，覆盖超过 5 个商品的函数级防御"""
     # schema 之外的函数级防御分支（L34-35）：>5 个 -> 400
     body = SimpleNamespace(product_ids=[1, 2, 3, 4, 5, 6], days=180)
     with pytest.raises(HTTPException) as e:
@@ -91,6 +97,7 @@ def test_compare_func_over_five_400(db):
 
 
 def test_compare_days_window_filters_old_snapshots(client, db):
+    """【正常流】days 时间窗口过滤掉窗口外的历史快照"""
     # days 窗口过滤：把快照放到窗口之外
     p = make_product(db, name="窗口商品", category="数码")
     l = make_listing(db, p, current_price=500.0)

@@ -10,6 +10,7 @@ BASE = "http://127.0.0.1:8000"
 
 def main():
     c = httpx.Client(base_url=BASE, timeout=120)
+    # 登录获取 JWT，后续请求统一带上鉴权头
     tok = c.post("/api/auth/login", json={"username": "admin", "password": "admin123456"}).json()["token"]
     h = {"Authorization": f"Bearer {tok}"}
 

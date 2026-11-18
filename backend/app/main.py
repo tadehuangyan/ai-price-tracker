@@ -1,3 +1,4 @@
+"""应用入口：创建 FastAPI 实例，注册路由/中间件，初始化种子数据并启动定时任务"""
 import logging
 from contextlib import asynccontextmanager
 
@@ -19,6 +20,7 @@ logging.basicConfig(level=logging.INFO)
 
 def seed(db):
     """初始化：建表、默认管理员、数据源、系统配置"""
+    # 1. 首次启动时创建默认管理员账号
     if db.query(User).filter(User.username == "admin").first() is None:
         db.add(
             User(
@@ -29,6 +31,7 @@ def seed(db):
                 role="admin",
             )
         )
+    # 2. 预置各电商平台数据源（默认仅启用京东与慢慢买）
     defaults = [
         ("jd", "京东", True, "{}"),
         ("taobao", "淘宝/天猫", False, "{}"),
@@ -44,6 +47,7 @@ def seed(db):
                     crawl_interval_minutes=1440, config=cfg,
                 )
             )
+    # 3. 默认系统配置（已存在的键不覆盖）
     for key, value, desc in [
         ("crawl_interval_minutes", "1440", "采集频率（分钟）"),
         ("alert_check_minutes", "10", "降价提醒检查间隔（分钟）"),
@@ -52,6 +56,7 @@ def seed(db):
     ]:
         if db.query(SystemConfig).get(key) is None:
             db.add(SystemConfig(key=key, value=value, description=desc))
+    # 4. 预置敏感词库（AI 导购内容过滤）
     for word, category in [
         ("赌博", "违法"),
         ("代开发票", "违法"),
@@ -62,6 +67,7 @@ def seed(db):
     ]:
         if db.query(SensitiveWord).filter(SensitiveWord.word == word).first() is None:
             db.add(SensitiveWord(word=word, category=category))
+    # 5. 记录一条系统初始化日志
     if db.query(SystemLog).count() == 0:
         db.add(SystemLog(module="system", message="系统初始化完成"))
     db.commit()
@@ -69,6 +75,7 @@ def seed(db):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """应用生命周期：启动时建表并写入种子数据、启动定时任务、后台预热缓存"""
     Base.metadata.create_all(bind=engine)
     db = SessionLocal()
     try:
@@ -89,6 +96,7 @@ def _warm_live_caches():
 
         import time
 
+        # 预热失败仅告警，不影响服务启动
         try:
             items = _fetch_live_items("", "", 24)
             _live_cache[("", "")] = (time.time(), items)
@@ -105,11 +113,13 @@ def _warm_live_caches():
         except Exception as e:
             logging.getLogger(__name__).warning("预热 discover 缓存失败：%s", e)
 
+    # daemon 线程随进程退出，不阻塞应用启动
     threading.Thread(target=_bg, daemon=True, name="warm-live-cache").start()
 
 
 app = FastAPI(title="商品历史价格追踪系统 (SPT)", version="1.0", lifespan=lifespan)
 
+# 跨域全放开：前后端分离部署（演示/比赛环境）
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -118,6 +128,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# 注册各业务模块路由
 app.include_router(auth.router)
 app.include_router(mail.router)
 app.include_router(products.router)
@@ -136,6 +147,7 @@ app.mount("/uploads", StaticFiles(directory=_updir), name="uploads")
 
 @app.get("/api/health")
 def health():
+    """健康检查接口，供前端/运维探测服务是否存活"""
     return {"ok": True, "service": "SPT"}
 
 
@@ -147,6 +159,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     导致所有错误提示“无响应”。
     """
     parts = []
+    # 按 Pydantic 错误类型映射为中文提示，再拼接字段名
     for err in exc.errors():
         loc = ".".join(str(x) for x in err.get("loc", []) if x != "body") or "参数"
         typ = err.get("type", "")

@@ -1,3 +1,7 @@
+"""系统管理路由：数据源、采集任务、统计/日志、系统配置、用户与敏感词/知识库管理
+
+全部接口均要求管理员权限（require_admin）。
+"""
 import json
 from datetime import datetime, timedelta
 
@@ -29,6 +33,7 @@ router = APIRouter(prefix="/api/admin", tags=["系统管理"])
 
 
 def log(db: Session, module: str, message: str, level: str = "INFO"):
+    """写系统日志并立即提交（管理操作留痕）"""
     db.add(SystemLog(level=level, module=module, message=message))
     db.commit()
 
@@ -37,6 +42,7 @@ def log(db: Session, module: str, message: str, level: str = "INFO"):
 
 @router.get("/datasources")
 def list_datasources(db: Session = Depends(get_db), _=Depends(require_admin)):
+    """查询全部数据源配置"""
     rows = db.query(DataSource).order_by(DataSource.id).all()
     return [
         {
@@ -54,6 +60,7 @@ def list_datasources(db: Session = Depends(get_db), _=Depends(require_admin)):
 
 @router.post("/datasources")
 def save_datasource(body: DataSourceIn, db: Session = Depends(get_db), _=Depends(require_admin)):
+    """新增或更新数据源配置（按 platform 幂等，已存在则覆盖字段）"""
     d = db.query(DataSource).filter(DataSource.platform == body.platform).first()
     if d is None:
         d = DataSource(platform=body.platform)
@@ -77,10 +84,12 @@ def list_tasks(
     db: Session = Depends(get_db),
     _=Depends(require_admin),
 ):
+    """采集任务列表：按状态筛选，分页返回（倒序）"""
     q = db.query(CrawlTask)
     if status:
         q = q.filter(CrawlTask.status == status)
     total = q.count()
+    # 分页：offset = (页码 - 1) * 每页条数
     rows = q.order_by(CrawlTask.id.desc()).offset((page - 1) * page_size).limit(page_size).all()
     return {
         "total": total,
@@ -104,6 +113,7 @@ def list_tasks(
 
 @router.post("/tasks/{task_id}/run")
 def run_task_now(task_id: int, db: Session = Depends(get_db), _=Depends(require_admin)):
+    """立即手动执行一次指定采集任务，返回执行结果"""
     t = db.query(CrawlTask).get(task_id)
     if t is None:
         raise HTTPException(404, "任务不存在")
@@ -117,6 +127,7 @@ def run_task_now(task_id: int, db: Session = Depends(get_db), _=Depends(require_
 
 @router.post("/tasks/{task_id}/pause")
 def pause_task(task_id: int, db: Session = Depends(get_db), _=Depends(require_admin)):
+    """暂停采集任务（状态置为 paused）"""
     t = db.query(CrawlTask).get(task_id)
     if t is None:
         raise HTTPException(404, "任务不存在")
@@ -127,6 +138,7 @@ def pause_task(task_id: int, db: Session = Depends(get_db), _=Depends(require_ad
 
 @router.post("/tasks/{task_id}/resume")
 def resume_task(task_id: int, db: Session = Depends(get_db), _=Depends(require_admin)):
+    """恢复采集任务（状态重置为 pending，等待下轮调度）"""
     t = db.query(CrawlTask).get(task_id)
     if t is None:
         raise HTTPException(404, "任务不存在")
@@ -139,6 +151,7 @@ def resume_task(task_id: int, db: Session = Depends(get_db), _=Depends(require_a
 
 @router.get("/stats")
 def stats(db: Session = Depends(get_db), _=Depends(require_admin)):
+    """系统统计概览：商品/报价/快照/用户/追踪/提醒数量与采集成功率"""
     total_tasks = db.query(CrawlTask).count()
     success = db.query(CrawlTask).filter(CrawlTask.status == "success").count()
     failed = db.query(CrawlTask).filter(CrawlTask.status == "failed").count()
@@ -160,6 +173,7 @@ def stats(db: Session = Depends(get_db), _=Depends(require_admin)):
         "task_total": total_tasks,
         "task_success": success,
         "task_failed": failed,
+        # 成功率按最近 24 小时的任务统计，无任务时不返回
         "success_rate": round(recent_success / recent_total * 100, 1) if recent_total else None,
     }
 
@@ -173,6 +187,7 @@ def logs(
     db: Session = Depends(get_db),
     _=Depends(require_admin),
 ):
+    """系统日志查询：按级别/模块筛选，分页返回（倒序）"""
     q = db.query(SystemLog)
     if level:
         q = q.filter(SystemLog.level == level)
@@ -201,6 +216,7 @@ def logs(
 
 @router.get("/config")
 def get_config(db: Session = Depends(get_db), _=Depends(require_admin)):
+    """查询全部系统配置项"""
     rows = db.query(SystemConfig).all()
     return [
         {
@@ -215,6 +231,7 @@ def get_config(db: Session = Depends(get_db), _=Depends(require_admin)):
 
 @router.put("/config")
 def set_config(body: ConfigIn, db: Session = Depends(get_db), _=Depends(require_admin)):
+    """更新系统配置（键不存在则创建）"""
     c = db.query(SystemConfig).get(body.key)
     if c is None:
         c = SystemConfig(key=body.key)
@@ -235,6 +252,7 @@ def list_users(
     db: Session = Depends(get_db),
     _=Depends(require_admin),
 ):
+    """用户列表：按用户名/邮箱模糊搜索，分页返回"""
     q = db.query(User)
     if keyword:
         q = q.filter((User.username.contains(keyword)) | (User.email.contains(keyword)))
@@ -255,6 +273,7 @@ def set_user_status(
     db: Session = Depends(get_db),
     admin: User = Depends(require_admin),
 ):
+    """启用/禁用用户账号（禁止管理员禁用自己）"""
     u = db.query(User).get(user_id)
     if u is None:
         raise HTTPException(404, "用户不存在")
@@ -276,6 +295,7 @@ def list_sensitive_words(
     db: Session = Depends(get_db),
     _=Depends(require_admin),
 ):
+    """敏感词列表：按关键词模糊搜索，分页返回"""
     q = db.query(SensitiveWord)
     if keyword:
         q = q.filter(SensitiveWord.word.contains(keyword))
@@ -300,6 +320,7 @@ def list_sensitive_words(
 
 @router.post("/sensitive-words")
 def add_sensitive_word(body: SensitiveWordIn, db: Session = Depends(get_db), _=Depends(require_admin)):
+    """新增单个敏感词（去空格、查重），并刷新内容过滤缓存"""
     word = body.word.strip()
     if not word:
         raise HTTPException(400, "敏感词不能为空")
@@ -316,6 +337,7 @@ def add_sensitive_word(body: SensitiveWordIn, db: Session = Depends(get_db), _=D
 def add_sensitive_words_batch(
     body: SensitiveWordBatchIn, db: Session = Depends(get_db), _=Depends(require_admin)
 ):
+    """批量导入敏感词：按行拆分，跳过空行/超长/重复词，返回新增与跳过数量"""
     lines = [w.strip() for w in body.words.splitlines()]
     added, skipped = 0, 0
     for word in lines:
@@ -328,6 +350,7 @@ def add_sensitive_words_batch(
         db.add(SensitiveWord(word=word, category=body.category or "通用"))
         added += 1
     db.commit()
+    # 词库变更后使内存缓存失效，下次过滤时重新加载
     invalidate_cache()
     log(db, "moderation", f"批量导入敏感词：新增 {added} 个，跳过 {skipped} 个")
     return {"ok": True, "added": added, "skipped": skipped}
@@ -335,6 +358,7 @@ def add_sensitive_words_batch(
 
 @router.delete("/sensitive-words/{word_id}")
 def delete_sensitive_word(word_id: int, db: Session = Depends(get_db), _=Depends(require_admin)):
+    """删除指定敏感词，并刷新内容过滤缓存"""
     row = db.query(SensitiveWord).get(word_id)
     if row is None:
         raise HTTPException(404, "敏感词不存在")
@@ -356,6 +380,7 @@ def list_knowledge(
     db: Session = Depends(get_db),
     _=Depends(require_admin),
 ):
+    """知识库条目列表：按标题/标签/正文模糊搜索，分页返回"""
     q = db.query(KnowledgeArticle)
     if keyword:
         q = q.filter(
@@ -386,6 +411,7 @@ def list_knowledge(
 
 @router.post("/knowledge")
 def create_knowledge(body: KnowledgeIn, db: Session = Depends(get_db), _=Depends(require_admin)):
+    """新增知识库条目（供 AI 导购 RAG 检索）"""
     db.add(KnowledgeArticle(
         title=body.title.strip(),
         category=(body.category or "").strip(),
@@ -402,6 +428,7 @@ def create_knowledge(body: KnowledgeIn, db: Session = Depends(get_db), _=Depends
 def update_knowledge(
     article_id: int, body: KnowledgeIn, db: Session = Depends(get_db), _=Depends(require_admin)
 ):
+    """更新指定知识库条目内容"""
     row = db.query(KnowledgeArticle).get(article_id)
     if row is None:
         raise HTTPException(404, "知识条目不存在")
@@ -417,6 +444,7 @@ def update_knowledge(
 
 @router.delete("/knowledge/{article_id}")
 def delete_knowledge(article_id: int, db: Session = Depends(get_db), _=Depends(require_admin)):
+    """删除指定知识库条目"""
     row = db.query(KnowledgeArticle).get(article_id)
     if row is None:
         raise HTTPException(404, "知识条目不存在")

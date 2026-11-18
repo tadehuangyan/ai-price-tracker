@@ -1,3 +1,8 @@
+/**
+ * 个人中心页（个人档案）：管理账号资料、用户画像与模拟收件箱。
+ * 支持修改昵称/邮箱/密码（改邮箱、改密码需邮箱验证码），
+ * 可查看并编辑 AI 自动整理的用户画像，并在此查阅验证码/提醒邮件。
+ */
 <template>
   <div class="page" ref="pageEl">
     <div class="page-head">
@@ -27,6 +32,7 @@
       </div>
     </div>
 
+    <!-- 三个页签：个人资料 / 用户画像 / 我的邮箱 -->
     <el-tabs v-model="tab" class="profile-tabs">
       <el-tab-pane label="个人资料" name="profile">
         <div class="card spec-card file-card reveal" data-delay="160">
@@ -45,6 +51,7 @@
               <template #label><span class="fld">E-MAIL · 邮箱</span></template>
               <el-input v-model="form.email" />
             </el-form-item>
+            <!-- 仅当邮箱被修改时出现：改邮箱需向新邮箱验证码确认 -->
             <el-form-item v-if="emailChanged">
               <template #label><span class="fld">MAIL CODE · 邮箱验证码</span></template>
               <div style="display: flex; gap: 8px; width: 100%">
@@ -59,6 +66,7 @@
               <template #label><span class="fld">NEW PWD · 新密码</span></template>
               <el-input v-model="form.password" type="password" show-password placeholder="不修改请留空（>=8 位含字母数字）" />
             </el-form-item>
+            <!-- 仅当填写了新密码时出现：改密码需向当前绑定邮箱验证码确认 -->
             <el-form-item v-if="form.password">
               <template #label><span class="fld">PWD CODE · 密码验证码</span></template>
               <div style="display: flex; gap: 8px; width: 100%">
@@ -154,6 +162,7 @@
       </el-tab-pane>
     </el-tabs>
 
+    <!-- 邮件详情弹窗：展示模拟投递邮件的正文 -->
     <el-dialog v-model="mailVisible" :title="currentMail?.subject || '邮件详情'" width="560px">
       <div class="muted" style="margin-bottom: 8px">
         发送时间：{{ currentMail?.created_at }} · 收件人：{{ currentMail?.to_email }} · 状态：模拟投递（sent）
@@ -171,8 +180,11 @@ import { useAuthStore } from '../store'
 import { countUp, magnetic, refreshScroll, revealOnScroll, splitReveal } from '../anim'
 
 const auth = useAuthStore()
+// 当前页签：profile 个人资料 / memo 用户画像 / inbox 我的邮箱
 const tab = ref('profile')
+// 保存按钮加载态
 const loading = ref(false)
+// 资料表单：改邮箱 / 改密码时分别携带对应验证码
 const form = reactive({
   nickname: auth.user?.nickname || '',
   email: auth.user?.email || '',
@@ -181,8 +193,10 @@ const form = reactive({
   password_code: '',
 })
 
+// 邮箱是否被修改：决定邮箱验证码行的显隐与保存时的携带字段
 const emailChanged = computed(() => form.email !== (auth.user?.email || ''))
 
+// 通用 60s 发送倒计时（邮箱/密码验证码按钮共用）
 function startCd(target: { value: number }) {
   target.value = 60
   const t = setInterval(() => {
@@ -190,9 +204,12 @@ function startCd(target: { value: number }) {
     if (target.value <= 0) clearInterval(t)
   }, 1000)
 }
+// 邮箱验证码重发倒计时（秒）
 const emailCd = ref(0)
+// 密码验证码重发倒计时（秒）
 const pwdCd = ref(0)
 
+/** 发送改邮箱验证码：模拟投递到新邮箱，发送后自动切到收件箱查看 */
 async function sendEmailCode() {
   try {
     const { data } = await api.post('/api/mail/send-code-auth', { email: form.email, purpose: 'email_change' })
@@ -205,6 +222,7 @@ async function sendEmailCode() {
   }
 }
 
+/** 发送改密码验证码：模拟投递到当前绑定邮箱，发送后自动切到收件箱查看 */
 async function sendPwdCode() {
   try {
     const { data } = await api.post('/api/mail/send-code-auth', { email: auth.user?.email, purpose: 'password_change' })
@@ -217,6 +235,7 @@ async function sendPwdCode() {
   }
 }
 
+/** 保存资料：仅在改邮箱/改密码时携带对应字段，成功后同步本地用户信息并清空敏感输入 */
 async function save() {
   loading.value = true
   try {
@@ -248,15 +267,21 @@ async function save() {
 }
 
 // ---------- 我的邮箱 ----------
+// 收件箱加载态
 const inboxLoading = ref(false)
+// 收件箱分页数据（含未读数：驱动速览统计与页签角标）
 const inbox = reactive({ total: 0, page: 1, page_size: 10, unread: 0, items: [] as any[] })
+// 邮件详情弹窗可见性
 const mailVisible = ref(false)
+// 当前查看的邮件
 const currentMail = ref<any>(null)
 
+// 邮件类别 -> 标签色：验证码/降价提醒/订阅确认/其他
 function categoryType(c: string) {
   return c === 'verify_code' ? 'warning' : c === 'price_alert' ? 'danger' : c === 'subscribe' ? 'success' : 'info'
 }
 
+/** 分页拉取收件箱邮件（同时更新总数与未读数） */
 async function loadInbox(page = 1) {
   inboxLoading.value = true
   try {
@@ -272,6 +297,7 @@ async function loadInbox(page = 1) {
   }
 }
 
+/** 打开邮件详情：未读邮件顺带标记已读并同步未读计数 */
 async function openMail(row: any) {
   currentMail.value = row
   mailVisible.value = true
@@ -282,6 +308,7 @@ async function openMail(row: any) {
   }
 }
 
+// 一键全部标记已读：服务端批量置读后同步本地状态
 async function readAll() {
   await api.post('/api/mail/read-all')
   inbox.items.forEach((m: any) => (m.is_read = true))
@@ -289,9 +316,12 @@ async function readAll() {
 }
 
 // ---------- 用户画像（AI 自动整理，可手动修改） ----------
+// 画像文本内容（Markdown 风格，导购建议会参考它）
 const memoContent = ref('')
+// 画像保存按钮加载态
 const memoLoading = ref(false)
 
+// 从服务端加载用户画像
 async function loadMemo() {
   try {
     const { data } = await api.get('/api/auth/profile-memo')
@@ -301,6 +331,7 @@ async function loadMemo() {
   }
 }
 
+/** 保存用户画像（含 20000 字上限校验） */
 async function saveMemo() {
   if (memoContent.value.length > 20000) {
     ElMessage.warning('画像内容过长（上限 20000 字）')
@@ -323,11 +354,13 @@ onMounted(() => {
 })
 
 // ================= 标本手记 · 动效（纯表现层，不改动上方业务逻辑） =================
+// 动效挂载点：页根 / 标题 / 档案速览 / 保存按钮
 const pageEl = ref<HTMLElement>()
 const titleEl = ref<HTMLElement>()
 const statsEl = ref<HTMLElement>()
 const saveWrap = ref<HTMLElement>()
 
+// 档案速览数字滚动动画
 function runCounts() {
   statsEl.value?.querySelectorAll<HTMLElement>('[data-count]').forEach((el) => countUp(el))
 }

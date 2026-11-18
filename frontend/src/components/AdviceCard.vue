@@ -18,8 +18,13 @@
 </template>
 
 <script setup lang="ts">
+/**
+ * 购买建议卡组件：展示 AI 结构化输出的购买建议——"印章"式动作徽章（值得购买/建议等待/继续观望）、
+ * 结论摘要、置信度进度条与支撑依据列表。无 emit，纯展示组件。
+ */
 import { computed } from 'vue'
 
+// 购买建议卡数据结构（AI 结构化输出）
 export interface AdviceCardData {
   action: 'buy' | 'wait' | 'watch'
   confidence: number
@@ -27,18 +32,23 @@ export interface AdviceCardData {
   evidence: string[]
 }
 
+// card：购买建议卡数据（购买动作、置信度 0~1、结论摘要、依据列表），由父组件传入
 const props = defineProps<{ card: AdviceCardData }>()
 
+// 购买动作 → 中文印章文案
 const ACTION_LABELS: Record<string, string> = {
   buy: '值得购买',
   wait: '建议等待',
   watch: '继续观望',
 }
+// 印章文案（未知动作兜底为"继续观望"）
 const actionLabel = computed(() => ACTION_LABELS[props.card.action] || '继续观望')
+// 置信度 0~1 转百分比整数，供进度条宽度与数字展示使用
 const confPct = computed(() => Math.round((props.card.confidence || 0) * 100))
 </script>
 
 <style scoped>
+/* 建议卡整体：纸感卡片 + 左侧墨绿标线 + 旋转印章徽章 + 置信度进度条 + 依据圆点列表 */
 .advice-card {
   position: relative;
   border: 1px solid var(--line-strong);

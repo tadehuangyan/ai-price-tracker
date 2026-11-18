@@ -1,8 +1,13 @@
+/**
+ * 路由配置与全局守卫：登录页独立，其余业务页面挂在主布局 Layout 下（视图组件懒加载），
+ * 并统一做登录态与管理员权限校验。
+ */
 import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from './store'
 
 const router = createRouter({
   history: createWebHistory(),
+  // 路由表：除 /login 外均嵌套在 Layout 主布局中，组件按需懒加载以减小首屏体积
   routes: [
     { path: '/login', component: () => import('./views/Login.vue') },
     {
@@ -21,6 +26,7 @@ const router = createRouter({
   ],
 })
 
+// 全局前置守卫：未登录访问任何页面一律跳转登录页；/admin 仅限管理员，否则回首页
 router.beforeEach((to) => {
   const auth = useAuthStore()
   if (to.path !== '/login' && !auth.isLogin) return '/login'

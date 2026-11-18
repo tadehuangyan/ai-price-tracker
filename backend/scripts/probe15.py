@@ -12,6 +12,7 @@ BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STORAGE = os.path.join(BASE, "storage", "manmanbuy_state.json")
 os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", os.path.join(BASE, "ms-playwright"))
 
+# 浏览器 UA 伪装，与登录时保持一致避免会话校验差异
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
@@ -19,6 +20,7 @@ UA = (
 
 
 def run_query(page, target_url, wait_sec=25):
+    """在历史价格页发起一次查询，期间处理授权/登录弹窗，收集 api 响应与 XHR"""
     api = []
     xhrs = []
 

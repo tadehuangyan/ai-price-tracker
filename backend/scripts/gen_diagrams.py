@@ -225,6 +225,7 @@ def er_overall_diagram():
     d.text((W // 2 - d.textlength(t, font=f_t) / 2, 30), t, font=f_t, fill=BLACK)
 
     def ent(cx, cy, text, w=150, h=56):
+        """矩形实体框"""
         x1, y1, x2, y2 = cx - w // 2, cy - h // 2, cx + w // 2, cy + h // 2
         d.rectangle([x1, y1, x2, y2], fill=WHITE, outline=BLACK, width=2)
         f = hei(18)
@@ -232,6 +233,7 @@ def er_overall_diagram():
         d.text((cx - tw / 2, cy - 12), text, font=f, fill=BLACK)
 
     def dia(cx, cy, text, w=110, h=60):
+        """菱形联系框"""
         pts = [(cx, cy - h // 2), (cx + w // 2, cy), (cx, cy + h // 2), (cx - w // 2, cy)]
         d.polygon(pts, fill=WHITE, outline=BLACK, width=2)
         f = song(16)

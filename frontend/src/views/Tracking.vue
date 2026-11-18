@@ -1,3 +1,8 @@
+/**
+ * 价格追踪页（采集台账）：以台账形式陈列用户在录的追踪商品及其当前价/目标价。
+ * 支持修改目标价、取消追踪，并摘录降价提醒记录；
+ * 金额用滚动数字呈现，状态以印章标注（已触底/等待中/降价中）。
+ */
 <template>
   <div class="page tracking" ref="rootEl">
     <header class="page-head">
@@ -147,9 +152,11 @@ import api, { errMsg } from '../api'
 import { splitReveal, revealOnScroll, countUp, magnetic, popIn, pinPress, refreshScroll } from '../anim'
 
 const router = useRouter()
+// 商品缺图时的兜底占位图
 const placeholder =
   'https://trae-api-cn.mchost.guru/api/ide/v1/text_to_image?prompt=minimal%20white%20product%20placeholder%20shopping%20bag&image_size=square'
 
+// —— 动效挂载点：页根 / 标题 / 空态图钉 / 弹窗内容 / 磁性按钮 ——
 const rootEl = ref<HTMLDivElement | null>(null)
 const titleEl = ref<HTMLHeadingElement | null>(null)
 const emptyPinEl = ref<HTMLSpanElement | null>(null)
@@ -157,11 +164,17 @@ const dialogBody = ref<HTMLDivElement | null>(null)
 const cancelMag = ref<HTMLSpanElement | null>(null)
 const saveMag = ref<HTMLSpanElement | null>(null)
 
+// 追踪台账条目列表（含商品与价格信息）
 const list = ref<any[]>([])
+// 降价提醒记录列表
 const alerts = ref<any[]>([])
+// 台账加载态
 const loading = ref(false)
+// 标定价弹窗可见性
 const targetDialog = ref(false)
+// 弹窗中编辑的目标价
 const editPrice = ref<number | undefined>()
+// 当前正在改目标价的台账条目
 const editing = ref<any>(null)
 
 // —— 台账排版工具 ——
@@ -174,6 +187,7 @@ function parts(v: unknown): [number, string] {
   const dec = Math.abs(n - int).toFixed(2).slice(1)
   return [int, dec === '.00' ? '' : dec]
 }
+/** 生成状态印章文案：已触底（达目标价）/ 等待中（已设目标价）/ 降价中（未设目标价） */
 function statusOf(row: any) {
   const hit = row.target_price != null && row.current_price != null && row.current_price <= row.target_price
   if (hit) return { text: '已触底', note: '已落至目标价，宜入手', cls: 'seal-hit' }
@@ -182,21 +196,27 @@ function statusOf(row: any) {
 }
 
 // —— 动效编排（副作用统一在此清理） ——
+// 已绑定磁性效果的元素集合（去重，避免重复绑定）
 const magnetized = new WeakSet<Element>()
+// 给元素绑定磁性按钮效果（每个元素只绑一次）
 function magnet(el: HTMLElement | null | undefined) {
   if (!el || magnetized.has(el)) return
   magnetized.add(el)
   magnetic(el)
 }
+// 本页创建的 ScrollTrigger 列表：卸载时精确 kill，不误伤其他页面
 let ownedTriggers: ScrollTrigger[] = []
+// 入场动效扫描，并记录新建的 ScrollTrigger 归本页所有
 function playReveal(root: ParentNode) {
   const before = new Set(ScrollTrigger.getAll())
   revealOnScroll(root)
   ownedTriggers.push(...ScrollTrigger.getAll().filter((t) => !before.has(t)))
 }
+// 对尚未播放过的金额数字做滚动动画
 function playCounts() {
   rootEl.value?.querySelectorAll<HTMLElement>('.cnt:not([data-counted])').forEach((el) => countUp(el))
 }
+// 数据/弹窗到位后统一编排动效：数字滚动 + 入场 + 磁性按钮 + 刷新滚动
 async function playPage() {
   await nextTick()
   playCounts()
@@ -205,6 +225,7 @@ async function playPage() {
   refreshScroll()
 }
 
+/** 并行拉取追踪台账与降价提醒，加载完成后编排页面动效 */
 async function load() {
   loading.value = true
   try {
@@ -219,11 +240,13 @@ async function load() {
     if (!list.value.length) pinPress(emptyPinEl.value)
   }
 }
+// 打开标定价弹窗：记录编辑条目并回填当前目标价
 function editTarget(row: any) {
   editing.value = row
   editPrice.value = row.target_price ?? undefined
   targetDialog.value = true
 }
+/** 保存目标价（复用创建追踪接口做更新），成功后关闭弹窗并刷新台账 */
 async function saveTarget() {
   try {
     await api.post('/api/tracking', { product_id: editing.value.product_id, target_price: editPrice.value ?? null })
@@ -234,6 +257,7 @@ async function saveTarget() {
     ElMessage.error(errMsg(e))
   }
 }
+/** 取消追踪：删除记录后刷新台账 */
 async function remove(row: any) {
   try {
     await api.delete(`/api/tracking/${row.id}`)
@@ -257,6 +281,7 @@ onMounted(() => {
   splitReveal(titleEl.value, 0.12)
   load()
 })
+// 卸载时只清理本页创建的 ScrollTrigger，不影响其他页面动效
 onUnmounted(() => {
   ownedTriggers.forEach((t) => t.kill())
   ownedTriggers = []

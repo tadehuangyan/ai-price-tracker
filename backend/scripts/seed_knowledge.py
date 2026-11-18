@@ -165,6 +165,7 @@ def main():
     added = 0
     try:
         for a in ARTICLES:
+            # 按 title 幂等：已存在的文章跳过，避免重复插入
             exists = db.query(KnowledgeArticle).filter(KnowledgeArticle.title == a["title"]).first()
             if exists:
                 continue

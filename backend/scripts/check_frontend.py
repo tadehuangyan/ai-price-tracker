@@ -9,6 +9,7 @@ os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", os.path.join(BASE, "ms-playwri
 
 FRONT = os.environ.get("FRONT_URL", "http://localhost:5174")
 SHOTS = os.path.join(BASE, "e2e_shots")
+# 浏览器 UA 伪装，模拟真实用户访问前端页面
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"

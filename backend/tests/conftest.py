@@ -40,6 +40,7 @@ TestingSession = sessionmaker(bind=engine, autocommit=False)
 
 @pytest.fixture()
 def db():
+    """重建内存库表结构并返回独立数据库会话，保证用例间数据隔离"""
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     session = TestingSession()
@@ -49,6 +50,7 @@ def db():
 
 @pytest.fixture()
 def client(db):
+    """返回 FastAPI TestClient，并将 get_db 依赖覆盖为测试会话"""
     def _override():
         yield db
 
@@ -60,6 +62,7 @@ def client(db):
 
 @pytest.fixture(autouse=True)
 def _reset_moderation_cache():
+    """自动夹具：测试前后清空内容审核缓存，避免用例间缓存互相干扰"""
     moderation.invalidate_cache()
     yield
     moderation.invalidate_cache()
@@ -76,6 +79,7 @@ def make_user(
     status="active",
     nickname="",
 ):
+    """构造并入库一个测试用户，默认普通用户且处于激活状态"""
     u = User(
         username=username,
         email=email,
@@ -91,10 +95,12 @@ def make_user(
 
 
 def auth_headers(user):
+    """为指定用户签发 JWT，返回带 Bearer Token 的请求头"""
     return {"Authorization": f"Bearer {create_token(user.id, user.role)}"}
 
 
 def make_product(db, name="测试手机", category="手机", brand="品牌", image_url=""):
+    """构造并入库一个测试商品"""
     p = Product(name=name, category=category, brand=brand, image_url=image_url)
     db.add(p)
     db.commit()
@@ -111,6 +117,7 @@ def make_listing(
     current_price=100.0,
     last_crawled_at=None,
 ):
+    """构造并入库一条商品在某平台的链接（Listing），可指定当前价与最近采集时间"""
     l = Listing(
         product_id=product.id,
         platform=platform,
@@ -126,6 +133,7 @@ def make_listing(
 
 
 def make_snapshot(db, listing, price, captured_at):
+    """构造并入库一条价格快照记录"""
     s = PriceSnapshot(listing_id=listing.id, price=price, captured_at=captured_at)
     db.add(s)
     db.commit()
@@ -134,6 +142,7 @@ def make_snapshot(db, listing, price, captured_at):
 
 
 def make_tracking(db, user, product, target_price=None, created_at=None):
+    """构造并入库一条用户价格关注记录，可指定目标价与创建时间"""
     t = Tracking(user_id=user.id, product_id=product.id, target_price=target_price)
     if created_at is not None:
         t.created_at = created_at
@@ -144,6 +153,7 @@ def make_tracking(db, user, product, target_price=None, created_at=None):
 
 
 def make_alert(db, user, product=None, price=88.0, target_price=90.0, message="降价提醒", is_read=False):
+    """构造并入库一条降价提醒，可指定是否已读"""
     a = Alert(
         user_id=user.id,
         product_id=product.id if product else None,

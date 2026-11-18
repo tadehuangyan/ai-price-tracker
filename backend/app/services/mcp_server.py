@@ -45,7 +45,11 @@ TOOLS = [
 
 
 def call_tool(name: str, arguments: dict) -> dict:
-    """执行工具调用 -> MCP tools/call 结果 {content, isError}"""
+    """执行工具调用 -> MCP tools/call 结果 {content, isError}
+
+    结果按 MCP 规范包装为 content 文本块；未知工具/执行异常均返回 isError=True
+    而非抛出，由客户端侧转成错误文本。
+    """
     try:
         if name == "fetch_webpage":
             data = web_fetch.fetch_page_text(str(arguments.get("url") or ""))
@@ -57,6 +61,7 @@ def call_tool(name: str, arguments: dict) -> dict:
             if not items:
                 text = "（未搜索到相关结果）"
             else:
+                # 搜索结果拼成编号列表：标题 + 链接 + 摘要
                 text = "\n\n".join(
                     f"{i + 1}. {it['title']}\n   {it['url']}\n   {it['snippet']}"
                     for i, it in enumerate(items)
@@ -73,8 +78,9 @@ def handle_request(msg: dict):
     method = msg.get("method") or ""
     mid = msg.get("id")
     if method.startswith("notifications/"):
-        return None
+        return None  # 通知类消息无需响应（如 notifications/initialized）
     if method == "initialize":
+        # MCP 握手：返回协议版本、能力声明与服务端信息
         return {"jsonrpc": "2.0", "id": mid, "result": {
             "protocolVersion": PROTOCOL_VERSION,
             "capabilities": {"tools": {}},
@@ -90,11 +96,13 @@ def handle_request(msg: dict):
         return {"jsonrpc": "2.0", "id": mid, "result": result}
     if mid is None:
         return None
+    # 未知方法：按 JSON-RPC 规范返回 -32601 Method not found
     return {"jsonrpc": "2.0", "id": mid,
             "error": {"code": -32601, "message": f"未知方法：{method}"}}
 
 
 def main():
+    """主循环：按行读取 stdin 的 JSON-RPC 消息，处理后写回 stdout（一行一条）"""
     for line in sys.stdin:
         line = line.strip()
         if not line:

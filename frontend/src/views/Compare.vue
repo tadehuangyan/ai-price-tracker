@@ -1,3 +1,8 @@
+/**
+ * 价格对比页（比价台）：将 1~5 件商品同台陈列，比较各平台报价与历史价格。
+ * 支持搜索/粘贴链接/从收藏夹三种方式添加对比项，产出柱状图谱、
+ * 多平台比价明细表与历史走势对比图。
+ */
 <template>
   <div class="page compare" ref="rootEl">
     <header class="page-head">
@@ -32,6 +37,7 @@
           <template #reference>
             <el-button class="mag-btn">＋ 收藏商品</el-button>
           </template>
+          <!-- 收藏（追踪）列表：点击任一项直接加入对比台 -->
           <div class="fav-list">
             <div class="panel-title">价格追踪（收藏栏）· 点击加入对比</div>
             <div v-for="t in trackings" :key="t.id" class="fav-item" @click="addFromFav(t)">
@@ -118,6 +124,7 @@
           </el-table-column>
           <el-table-column label="平台报价" min-width="310">
             <template #default="{ row }">
+              <!-- 平台报价行：接口已按价格升序返回，首条即最低价并盖"最低"印章 -->
               <div v-for="(o, i) in row.offers" :key="o.platform" class="offer-line">
                 <span class="offer-no">{{ pad2(i + 1) }}</span>
                 <span class="offer-platform">{{ o.platform }}</span>
@@ -213,22 +220,34 @@ import PriceTrendChart from '../components/PriceTrendChart.vue'
 import { splitReveal, revealOnScroll, countUp, magnetic, pinPress, refreshScroll } from '../anim'
 
 const route = useRoute()
+// 已选中对比的商品 id 列表（限 1~5 个）
 const selected = ref<number[]>([])
+// 商品名远程搜索的下拉选项
 const options = ref<any[]>([])
+// 搜索 / 链接收录进行中
 const searching = ref(false)
+// 对比时间窗口（天），影响走势对比范围
 const days = ref(180)
+// 对比请求加载态
 const loading = ref(false)
+// 对比结果：图谱 / 检验单 / 走势三块共用
 const result = ref<any>(null)
+// 比价柱状图容器 DOM
 const barEl = ref<HTMLDivElement>()
+// ECharts 实例：懒初始化并复用，避免重复创建
 let barChart: echarts.ECharts | null = null
 
 // —— 统一添加入口：搜索 / 链接收录 / 收藏商品 ——
+// 商品缺图时的兜底占位图
 const placeholder =
   'https://trae-api-cn.mchost.guru/api/ide/v1/text_to_image?prompt=minimal%20white%20product%20placeholder%20shopping%20bag%20flat%20design&image_size=square'
 const selectKey = ref(0) // 收录完成后重置输入框（清掉已粘贴的链接文本）
+// 收藏商品弹出层可见性
 const favVisible = ref(false)
+// 价格追踪（收藏栏）列表：供快速加入对比
 const trackings = ref<any[]>([])
 
+/** 将商品加入对比台：去重、上限 5 件，必要时补齐下拉选项 */
 function pushSelected(pid: number, name: string) {
   if (!pid) return
   if (selected.value.includes(pid)) {
@@ -271,6 +290,7 @@ function addFromFav(t: any) {
   pushSelected(t.product_id, t.product_name)
 }
 
+// 拉取收藏（追踪）列表供快速加入对比（未登录等情况静默忽略）
 async function loadTrackings() {
   try {
     const { data } = await api.get('/api/tracking')
@@ -297,21 +317,27 @@ function parts(v: unknown): [number, string] {
 }
 
 // —— 动效编排（副作用统一在此清理） ——
+// 已绑定磁性效果的元素集合（去重，避免重复绑定）
 const magnetized = new WeakSet<Element>()
+// 给元素绑定磁性按钮效果（每个元素只绑一次）
 function magnet(el: HTMLElement | null | undefined) {
   if (!el || magnetized.has(el)) return
   magnetized.add(el)
   magnetic(el)
 }
+// 本页创建的 ScrollTrigger 列表：卸载时精确 kill，不误伤其他页面
 let ownedTriggers: ScrollTrigger[] = []
+// 入场动效扫描，并记录新建的 ScrollTrigger 归本页所有
 function playReveal(root: ParentNode) {
   const before = new Set(ScrollTrigger.getAll())
   revealOnScroll(root)
   ownedTriggers.push(...ScrollTrigger.getAll().filter((t) => !before.has(t)))
 }
+// 对尚未播放过的金额数字做滚动动画
 function playCounts() {
   rootEl.value?.querySelectorAll<HTMLElement>('.cnt:not([data-counted])').forEach((el) => countUp(el))
 }
+// 数据到位后统一编排动效：数字滚动 + 入场 + 磁性按钮 + 刷新滚动
 async function playPage() {
   await nextTick()
   playCounts()
@@ -337,6 +363,7 @@ async function searchProducts(q: string) {
   }
 }
 
+/** 提交对比：拉取比价结果后渲染柱状图谱并编排页面动效 */
 async function doCompare() {
   loading.value = true
   try {
@@ -352,6 +379,7 @@ async function doCompare() {
   }
 }
 
+/** 用 ECharts 渲染"当前最低价 vs 历史最低价"分组柱状图 */
 function renderBar(data: any) {
   if (!barEl.value) return
   barChart = barChart || echarts.init(barEl.value)
@@ -390,6 +418,7 @@ function renderBar(data: any) {
   )
 }
 
+// 走势对比序列：把对比结果转成 PriceTrendChart 需要的多商品序列格式
 const compareSeriesComp = computed(() =>
   (result.value?.products || []).map((p: any) => ({ name: p.product_name, data: p.series }))
 )
@@ -406,6 +435,7 @@ onMounted(async () => {
     if (selected.value.length) doCompare()
   }
 })
+// 卸载时只清理本页创建的 ScrollTrigger，不影响其他页面动效
 onUnmounted(() => {
   ownedTriggers.forEach((t) => t.kill())
   ownedTriggers = []

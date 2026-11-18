@@ -51,6 +51,7 @@ def send_code_auth(
 
 
 def _do_send_code(email: str, purpose: str, user_id, db: Session):
+    """统一的发码入口：投递失败时转换为 400 错误抛出"""
     ok, message, _ = send_verification_code(db, email, purpose, user_id)
     if not ok:
         raise HTTPException(400, message)
@@ -112,6 +113,7 @@ def mark_read(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    """标记单封邮件为已读（仅限收件人本人）"""
     m = db.query(MailMessage).get(mail_id)
     if m and (m.user_id == user.id or m.to_email == user.email):
         m.is_read = True
@@ -121,6 +123,7 @@ def mark_read(
 
 @router.post("/read-all")
 def mark_all_read(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """一键将当前用户的全部未读邮件标记为已读"""
     db.query(MailMessage).filter(
         ((MailMessage.user_id == user.id) | (MailMessage.to_email == user.email))
         & (MailMessage.is_read == False)  # noqa: E712
@@ -140,6 +143,7 @@ def admin_list(
     db: Session = Depends(get_db),
     _=Depends(require_admin),
 ):
+    """管理端：全站模拟邮件记录查询（按邮箱/主题关键词与分类筛选，分页返回）"""
     q = db.query(MailMessage)
     if keyword:
         q = q.filter(

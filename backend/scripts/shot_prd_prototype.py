@@ -17,6 +17,7 @@ def main():
         page = browser.new_page(viewport={"width": 1440, "height": 1000}, device_scale_factor=2)
         page.goto(HTML, wait_until="networkidle")
         page.wait_for_timeout(500)
+        # 只截取需求文档中的手机原型区域（.phone 元素）
         el = page.query_selector(".phone")
         el.screenshot(path=OUT)
         print("saved:", OUT)

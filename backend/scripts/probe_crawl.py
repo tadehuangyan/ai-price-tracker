@@ -6,6 +6,7 @@
 import json
 import sys
 
+# 伪装浏览器请求头：UA 与中文语言，降低被目标站点直接拒绝的概率
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "

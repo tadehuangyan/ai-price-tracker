@@ -17,15 +17,18 @@ from conftest import auth_headers, make_user
 
 @pytest.fixture()
 def profile_dir(tmp_path, monkeypatch):
+    """夹具：将画像目录指向临时目录，避免污染真实存储"""
     monkeypatch.setattr(user_profile, "PROFILE_DIR", str(tmp_path))
     return tmp_path
 
 
 def _client_user(db, role="user"):
+    """辅助函数：创建画像测试用户（可指定角色）"""
     return make_user(db, username="pf_user", email="pf@qq.com", role=role)
 
 
 def _parse_sse(text):
+    """辅助函数：解析 SSE 文本，提取 data: 行为 JSON 事件列表"""
     events = []
     for part in text.split("\n\n"):
         part = part.strip()
@@ -37,6 +40,7 @@ def _parse_sse(text):
 # ================= MD 文件读写 =================
 
 def test_record_note_creates_md_with_sections(profile_dir):
+    """【正常流】记录偏好自动创建 MD 文件并按类别分节"""
     r = user_profile.record_note(1, "预算", "预算约 3000 元")
     assert r["ok"] and r["section"] == "预算区间" and not r["duplicated"]
     path = os.path.join(str(profile_dir), "user_1.md")
@@ -46,6 +50,7 @@ def test_record_note_creates_md_with_sections(profile_dir):
 
 
 def test_record_note_dedupe_and_unknown_category(profile_dir):
+    """【边界】重复偏好去重不落盘，未知类别归入消费偏好"""
     user_profile.record_note(1, "偏好", "偏好性价比高的手机")
     r = user_profile.record_note(1, "偏好", "偏好性价比高的手机")
     assert r["duplicated"] is True  # 重复不落盘
@@ -56,12 +61,14 @@ def test_record_note_dedupe_and_unknown_category(profile_dir):
 
 
 def test_record_note_empty_and_truncate(profile_dir):
+    """【边界】空白偏好被拒绝，超长偏好截断到上限"""
     assert user_profile.record_note(1, "偏好", "  ")["ok"] is False
     r = user_profile.record_note(1, "偏好", "长" * 300)
     assert len(r["note"]) == user_profile.MAX_NOTE_LEN
 
 
 def test_build_context_formatting(profile_dir):
+    """【正常流】画像上下文格式化输出，无画像时返回空串"""
     assert user_profile.build_context(1) == ""  # 无画像返回空串
     user_profile.record_note(1, "预算", "预算约 3000 元")
     user_profile.record_note(1, "关注", "关注 iPhone16")
@@ -71,6 +78,7 @@ def test_build_context_formatting(profile_dir):
 
 
 def test_sections_round_trip_profile_dir(profile_dir):
+    """【正常流】多类别多次写入后解析保持分节结构"""
     # 多类别多次写入后解析保持分节结构
     for cat, note in [("偏好", "偏好轻薄本"), ("预算", "预算 6000"), ("习惯", "习惯大促囤货"),
                       ("关注", "关注轻薄本")]:
@@ -85,6 +93,7 @@ def test_sections_round_trip_profile_dir(profile_dir):
 # ================= Agent 工具 =================
 
 def test_tool_update_and_get_profile(profile_dir, db):
+    """【正常流】update/get_user_profile 工具可写入并读回画像"""
     u = _client_user(db)
     r = _json.loads(agent_tools.dispatch(db, u, "update_user_profile",
                                          _json.dumps({"category": "预算", "note": "预算约 3000 元"})))
@@ -94,6 +103,7 @@ def test_tool_update_and_get_profile(profile_dir, db):
 
 
 def test_tool_profile_requires_login(profile_dir, db):
+    """【异常流】未登录调用画像工具被拒绝"""
     assert "登录" in agent_tools.dispatch(db, None, "update_user_profile",
                                           _json.dumps({"category": "偏好", "note": "x"}))
     assert "登录" in agent_tools.dispatch(db, None, "get_user_profile", "{}")
@@ -102,6 +112,7 @@ def test_tool_profile_requires_login(profile_dir, db):
 # ================= 画像注入对话 =================
 
 def test_chat_reply_injects_profile(profile_dir, db, monkeypatch):
+    """【正常流】登录用户的画像注入 system 消息并声明记录能力"""
     u = _client_user(db)
     user_profile.record_note(u.id, "预算", "预算约 3000 元")
     calls = []
@@ -114,6 +125,7 @@ def test_chat_reply_injects_profile(profile_dir, db, monkeypatch):
 
 
 def test_chat_reply_no_user_no_profile(profile_dir, db, monkeypatch):
+    """【边界】未登录对话不注入他人画像"""
     user_profile.record_note(99, "预算", "无关画像")
     calls = []
     monkeypatch.setattr(ai_advisor, "llm_chat",
@@ -125,6 +137,7 @@ def test_chat_reply_no_user_no_profile(profile_dir, db, monkeypatch):
 # ================= 个人中心：查看 / 编辑画像 =================
 
 def test_profile_memo_endpoints(client, db, profile_dir):
+    """【正常流】个人中心查看/编辑画像并真实落盘"""
     u = _client_user(db)
     h = auth_headers(u)
     assert client.get("/api/auth/profile-memo", headers=h).json()["content"] == ""
@@ -136,11 +149,13 @@ def test_profile_memo_endpoints(client, db, profile_dir):
 
 
 def test_profile_memo_requires_login(client, db, profile_dir):
+    """【异常流】未登录访问画像接口被拒"""
     assert client.get("/api/auth/profile-memo").status_code in (401, 403)
     assert client.put("/api/auth/profile-memo", json={"content": "x"}).status_code in (401, 403)
 
 
 def test_record_note_preserves_free_form(db, profile_dir):
+    """【边界】用户手编的自由内容不被 Agent 记录覆盖"""
     # 用户手编的自由内容（标题/备注）不会被 Agent 记录覆盖
     user_profile.write_profile(1, "# 我的自定义标题\n\n随便写的备注\n\n## 消费偏好\n- 老条目\n")
     user_profile.record_note(1, "偏好", "新条目")
@@ -152,6 +167,7 @@ def test_record_note_preserves_free_form(db, profile_dir):
 # ================= Agent 对话中记录偏好（流式） =================
 
 def test_stream_agent_records_preference(client, db, monkeypatch, profile_dir):
+    """【正常流】流式对话中 Agent 调用工具记录偏好并落盘"""
     u = _client_user(db)
     calls = []
 

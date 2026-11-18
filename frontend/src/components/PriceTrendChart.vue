@@ -3,9 +3,14 @@
 </template>
 
 <script setup lang="ts">
+/**
+ * 历史价格走势图组件：基于 ECharts 渲染单商品历史价格曲线（标注最高价/最低价/当前价），
+ * 传入 compareSeries 时切换为多商品对比曲线，配色沿用全站"标本手记"视觉风格。
+ */
 import { onMounted, onUnmounted, ref, watch } from 'vue'
 import * as echarts from 'echarts'
 
+// points：单商品价格点序列；compareSeries：多商品对比序列（非空则进入对比模式）；height/title：图表高度与标题
 const props = withDefaults(
   defineProps<{
     points: { date: string; price: number; platform?: string }[]
@@ -32,9 +37,14 @@ const MONO = '"JetBrains Mono", "SFMono-Regular", Consolas, monospace'
 // 对比线序列配色：墨绿 / 朱砂 / 墨 / 苔绿，绝不用默认蓝
 const PALETTE = ['#3c5a45', '#b0603c', '#26231c', '#93a596', '#8d8574', '#5d7a66']
 
+// 图表容器 DOM 与 ECharts 实例
 const el = ref<HTMLDivElement>()
 let chart: echarts.ECharts | null = null
 
+/**
+ * 构建并应用 ECharts 配置：对比模式下把各商品序列按日期对齐后绘制多条平滑曲线；
+ * 单商品模式下绘制价格走势，并标注最高价、最低价与当前价参考线。
+ */
 function render() {
   if (!chart) return
   const useCompare = props.compareSeries.length > 0
@@ -172,5 +182,6 @@ onUnmounted(() => {
   window.removeEventListener('resize', resize)
   chart?.dispose()
 })
+// 数据变化（含深层变更）时整体重绘图表
 watch(() => [props.points, props.compareSeries], render, { deep: true })
 </script>

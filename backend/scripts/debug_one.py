@@ -11,6 +11,7 @@ sys.path.insert(0, BASE)
 os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", os.path.join(BASE, "ms-playwright"))
 
 STORAGE = os.path.join(BASE, "storage", "manmanbuy_state.json")
+# 浏览器 UA 伪装，与采集脚本保持一致避免会话校验差异
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"

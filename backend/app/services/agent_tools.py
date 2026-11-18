@@ -13,6 +13,7 @@ from ..models import Listing, Product, Tracking, User
 
 MAX_TRACK_PER_USER = 30  # 与 routers/tracking.py 的追踪上限一致
 
+# OpenAI 兼容的 tools 函数定义（JSON Schema 描述参数，供大模型 Function Calling 选择调用）
 TOOL_SPECS = [
     {
         "type": "function",
@@ -173,10 +174,12 @@ TOOL_LABELS = {
 
 
 def _j(obj) -> str:
+    """工具结果统一序列化为 JSON 文本（中文不转义，datetime 等转 str）"""
     return json.dumps(obj, ensure_ascii=False, default=str)
 
 
 def _to_int(v):
+    """宽容的整数转换：模型可能传字符串数字，转换失败返回 None 交由调用方报错"""
     try:
         return int(v)
     except (TypeError, ValueError):
@@ -184,6 +187,7 @@ def _to_int(v):
 
 
 def _to_float(v):
+    """宽容的浮点转换：转换失败返回 None 交由调用方报错"""
     try:
         return float(v)
     except (TypeError, ValueError):
@@ -191,6 +195,7 @@ def _to_float(v):
 
 
 def _get_price_history(db: Session, user, args: dict) -> str:
+    """查询历史价格：product_id 走系统商品库，url 走慢慢买实时抓取，二选一"""
     from .ai_advisor import _link_brief, build_context  # 延迟导入避免循环依赖
 
     pid = _to_int(args.get("product_id"))
@@ -212,8 +217,9 @@ def _get_price_history(db: Session, user, args: dict) -> str:
 
 
 def _search_products(db: Session, user, args: dict) -> str:
+    """关键词模糊搜索系统商品库，返回候选商品（ID/分类/最低价/报价数）"""
     keyword = str(args.get("keyword") or "").strip()
-    limit = min(_to_int(args.get("limit")) or 5, 10)
+    limit = min(_to_int(args.get("limit")) or 5, 10)  # 夹取上限，防止返回过大挤爆上下文
     if not keyword:
         return _j({"error": "缺少 keyword"})
     rows = db.query(Product).filter(Product.name.like(f"%{keyword}%")).limit(limit).all()
@@ -231,15 +237,16 @@ def _search_products(db: Session, user, args: dict) -> str:
 
 
 def _compare_products(db: Session, user, args: dict) -> str:
+    """多品比价：逐个统计区间历史最低/均价 + 当前各平台报价（供『哪个更划算』判断）"""
     from datetime import datetime, timedelta
 
     from ..models import PriceSnapshot
 
     ids = args.get("product_ids") or []
-    ids = [_to_int(i) for i in ids if _to_int(i) is not None][:5]
+    ids = [_to_int(i) for i in ids if _to_int(i) is not None][:5]  # 至多对比 5 个商品
     if len(ids) < 2:
         return _j({"error": "需要至少 2 个商品 ID 进行对比"})
-    days = min(_to_int(args.get("days")) or 30, 365)
+    days = min(_to_int(args.get("days")) or 30, 365)  # 统计窗口夹取在 1 年内
     since = datetime.now() - timedelta(days=days)
     items = []
     for pid in ids:
@@ -247,6 +254,7 @@ def _compare_products(db: Session, user, args: dict) -> str:
         if p is None:
             items.append({"product_id": pid, "error": "商品不存在"})
             continue
+        # 关联报价表取该商品区间内的全部价格快照
         prices = [
             s.price
             for s in db.query(PriceSnapshot)
@@ -254,6 +262,7 @@ def _compare_products(db: Session, user, args: dict) -> str:
             .filter(Listing.product_id == pid, PriceSnapshot.captured_at >= since)
             .all()
         ]
+        # 当前报价按价格升序，取前 5 个平台
         offers = sorted(
             ({"platform": l.platform, "price": l.current_price} for l in p.listings if l.current_price),
             key=lambda x: x["price"],
@@ -271,6 +280,7 @@ def _compare_products(db: Session, user, args: dict) -> str:
 
 
 def _set_price_alert(db: Session, user, args: dict) -> str:
+    """创建/更新价格追踪（写操作，需登录）：已追踪则只更新目标价，避免重复订阅"""
     if user is None:
         return _j({"ok": False, "error": "需要登录用户才能创建价格追踪"})
     pid = _to_int(args.get("product_id"))
@@ -298,6 +308,7 @@ def _set_price_alert(db: Session, user, args: dict) -> str:
 
 
 def _list_trackings(db: Session, user, args: dict) -> str:
+    """列出当前用户的追踪商品（含目标价与当前最低价），需登录"""
     if user is None:
         return _j({"ok": False, "error": "需要登录用户才能查看追踪列表"})
     rows = (
@@ -322,6 +333,7 @@ def _list_trackings(db: Session, user, args: dict) -> str:
 
 
 def _query_knowledge(db: Session, user, args: dict) -> str:
+    """RAG 知识库检索：返回命中的条目摘要与来源（供回答标注引用）"""
     from .knowledge import retrieve
 
     question = str(args.get("question") or "").strip()
@@ -332,6 +344,7 @@ def _query_knowledge(db: Session, user, args: dict) -> str:
 
 
 def _update_user_profile(db: Session, user, args: dict) -> str:
+    """记录一条用户画像事实（消费偏好/预算/关注/习惯），需登录"""
     from . import user_profile
 
     if user is None:
@@ -341,6 +354,7 @@ def _update_user_profile(db: Session, user, args: dict) -> str:
 
 
 def _get_user_profile(db: Session, user, args: dict) -> str:
+    """读取用户画像压缩文本（个性化建议前供模型参考），需登录"""
     from . import user_profile
 
     if user is None:
@@ -363,6 +377,7 @@ def _mcp_call(name: str, args: dict) -> str:
 
 
 def _web_search(db: Session, user, args: dict) -> str:
+    """MCP 网页搜索封装：查询商品行情/市场动态，返回标题/链接/摘要"""
     query = str(args.get("query") or "").strip()
     if not query:
         return _j({"error": "缺少 query"})
@@ -370,6 +385,7 @@ def _web_search(db: Session, user, args: dict) -> str:
 
 
 def _fetch_webpage(db: Session, user, args: dict) -> str:
+    """MCP 网页抓取封装：获取指定网页正文（行情资讯/评测/促销规则）"""
     url = str(args.get("url") or "").strip()
     if not url:
         return _j({"error": "缺少 url"})
@@ -377,6 +393,7 @@ def _fetch_webpage(db: Session, user, args: dict) -> str:
 
 
 HANDLERS = {
+    # 白名单映射：工具名 -> 处理函数（不在表内的工具名一律拒绝执行）
     "get_price_history": _get_price_history,
     "search_products": _search_products,
     "compare_products": _compare_products,
@@ -393,6 +410,7 @@ HANDLERS = {
 def dispatch(db: Session, user: User | None, name: str, arguments: str) -> str:
     """白名单分发执行工具调用，任何失败都返回错误文本而非抛异常"""
     try:
+        # 解析模型传来的 arguments JSON 文本；解析失败回填错误文本，不抛异常
         args = json.loads(arguments or "{}")
         if not isinstance(args, dict):
             raise ValueError("参数应为 JSON 对象")

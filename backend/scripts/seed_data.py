@@ -28,6 +28,7 @@ KEYWORDS = [
     ("DDR5 台式机内存", "电脑配件", 3),
 ]
 
+# 浏览器 UA 伪装，避免被站点按默认 UA 识别为爬虫
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
@@ -101,9 +102,11 @@ def main():
     failed = []
 
     with sync_playwright() as p:
+        # 关闭自动化特征并使用中文环境启动浏览器，降低被风控概率
         browser = p.chromium.launch(headless=True, args=["--disable-blink-features=AutomationControlled"])
         ctx = browser.new_context(user_agent=UA, locale="zh-CN", viewport={"width": 1366, "height": 900})
         ctx.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+        # 注入慢慢买登录态
         ctx.add_cookies(storage_cookies)
         page = ctx.new_page()
 

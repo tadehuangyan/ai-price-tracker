@@ -1,3 +1,4 @@
+"""价格对比路由：多商品（<=5）跨平台报价对比与历史价格走势对比"""
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -12,6 +13,7 @@ router = APIRouter(prefix="/api/compare", tags=["价格对比"])
 
 
 def _daily_series(db: Session, product_id: int, days: int):
+    """聚合商品近 N 天的每日最低价序列，返回 {日期: (价格, 平台)}"""
     since = datetime.now() - timedelta(days=days)
     rows = (
         db.query(PriceSnapshot, Listing.platform)
@@ -21,6 +23,7 @@ def _daily_series(db: Session, product_id: int, days: int):
         .all()
     )
     daily = {}
+    # 同一天多个快照只保留最低价（及其来源平台）
     for snap, plat in rows:
         d = snap.captured_at.strftime("%Y-%m-%d")
         if d not in daily or snap.price < daily[d][0]:
@@ -67,6 +70,7 @@ def compare(body: CompareIn, db: Session = Depends(get_db)):
                 "image_url": p.image_url,
                 "offers": offers,
                 "lowest": lowest,
+                # 各平台当前报价的最高与最低价差（仅一个报价时为 0）
                 "diff": round(offers[-1]["price"] - offers[0]["price"], 2)
                 if len(offers) > 1
                 else 0,

@@ -22,17 +22,20 @@ from conftest import auth_headers, make_listing, make_product, make_user
 
 @pytest.fixture()
 def admin(db):
+    """夹具：创建一个管理员用户"""
     return make_user(db, username="admin1", email="admin1@qq.com", role="admin")
 
 
 @pytest.fixture()
 def headers(admin):
+    """夹具：返回管理员的鉴权请求头"""
     return auth_headers(admin)
 
 
 # ================= 权限 =================
 
 def test_admin_api_requires_admin(client, db):
+    """【异常流】普通用户访问全部管理接口均返回 403"""
     u = make_user(db, username="nobody", email="nobody@qq.com")
     for path in ("/api/admin/datasources", "/api/admin/tasks", "/api/admin/stats",
                  "/api/admin/logs", "/api/admin/config", "/api/admin/users",
@@ -43,6 +46,7 @@ def test_admin_api_requires_admin(client, db):
 # ================= 数据源管理 =================
 
 def test_list_datasources(client, db, headers):
+    """【正常流】数据源列表返回全部记录，覆盖 updated_at 有值/为空分支"""
     db.add(DataSource(platform="jd", name="京东", enabled=True, config="{}"))
     d2 = DataSource(platform="taobao", name="淘宝", enabled=False, config="{}")
     db.add(d2)
@@ -58,6 +62,7 @@ def test_list_datasources(client, db, headers):
 
 
 def test_save_datasource_create_with_name_and_config(client, db, headers):
+    """【正常流】新建数据源保存名称/采集周期/配置并记录操作日志"""
     r = client.post("/api/admin/datasources", json={
         "platform": "suning", "name": "苏宁", "enabled": True,
         "crawl_interval_minutes": 720, "config": '{"k": 1}',
@@ -69,6 +74,7 @@ def test_save_datasource_create_with_name_and_config(client, db, headers):
 
 
 def test_save_datasource_update_name_fallbacks(client, db, headers):
+    """【边界】保存数据源时名称缺省链与配置缺省回退生效"""
     # name 缺省链：body.name -> d.name -> platform；config 缺省 -> "{}"
     db.add(DataSource(platform="jd", name="京东", enabled=True, config="{}"))
     db.commit()
@@ -83,6 +89,7 @@ def test_save_datasource_update_name_fallbacks(client, db, headers):
 # ================= 采集任务 =================
 
 def _tasks(db):
+    """辅助函数：构造一条成功、一条失败的采集任务"""
     t1 = CrawlTask(platform="jd", target="https://j/1", listing_id=None,
                    status="success", last_run_at=datetime.now(), success_count=2)
     t2 = CrawlTask(platform="taobao", target="https://t/1", listing_id=None,
@@ -93,6 +100,7 @@ def _tasks(db):
 
 
 def test_list_tasks_no_filter_and_filter(client, db, headers):
+    """【正常流】任务列表支持无过滤与按状态过滤"""
     _tasks(db)
     r_all = client.get("/api/admin/tasks", headers=headers)
     assert r_all.json()["total"] == 2
@@ -105,17 +113,20 @@ def test_list_tasks_no_filter_and_filter(client, db, headers):
 
 
 def test_list_tasks_pagination(client, db, headers):
+    """【正常流】任务列表分页参数生效"""
     _tasks(db)
     r = client.get("/api/admin/tasks", params={"page": 2, "page_size": 1}, headers=headers)
     assert r.json()["total"] == 2 and len(r.json()["items"]) == 1
 
 
 def test_run_task_404(client, db, headers):
+    """【异常流】运行不存在的采集任务返回 404"""
     r = client.post("/api/admin/tasks/99999/run", headers=headers)
     assert r.status_code == 404
 
 
 def test_run_task_success_updates_listing(client, db, headers, monkeypatch):
+    """【正常流】任务执行成功后回写报价/标题并记录成功日志"""
     p = make_product(db)
     l = make_listing(db, p, current_price=100.0)
     t = CrawlTask(platform="jd", target="https://j/1", listing_id=l.id, status="pending")
@@ -131,6 +142,7 @@ def test_run_task_success_updates_listing(client, db, headers, monkeypatch):
 
 
 def test_run_task_success_without_listing(client, db, headers, monkeypatch):
+    """【边界】任务未关联报价链接时不回写报价"""
     # listing_id 为空 -> 不回写报价的条件分支
     t = CrawlTask(platform="web", target="https://x/1", listing_id=None, status="pending")
     db.add(t)
@@ -141,6 +153,7 @@ def test_run_task_success_without_listing(client, db, headers, monkeypatch):
 
 
 def test_run_task_no_price_fails(client, db, headers, monkeypatch):
+    """【异常流】采集未解析到价格时任务标记失败并记 ERROR 日志"""
     t = CrawlTask(platform="jd", target="https://j/1", listing_id=None, status="pending")
     db.add(t)
     db.commit()
@@ -153,6 +166,7 @@ def test_run_task_no_price_fails(client, db, headers, monkeypatch):
 
 
 def test_run_task_exception_fails(client, db, headers, monkeypatch):
+    """【异常流】采集抛异常时任务标记失败并记录错误信息"""
     t = CrawlTask(platform="jd", target="https://j/1", listing_id=None, status="pending")
     db.add(t)
     db.commit()
@@ -167,6 +181,7 @@ def test_run_task_exception_fails(client, db, headers, monkeypatch):
 
 
 def test_pause_and_resume_task(client, db, headers):
+    """【正常流】任务暂停与恢复状态切换正确"""
     t1, t2 = _tasks(db)
     assert client.post(f"/api/admin/tasks/{t1.id}/pause", headers=headers).json()["ok"] is True
     assert db.query(CrawlTask).get(t1.id).status == "paused"
@@ -175,6 +190,7 @@ def test_pause_and_resume_task(client, db, headers):
 
 
 def test_pause_and_resume_404(client, db, headers):
+    """【异常流】暂停/恢复不存在的任务返回 404"""
     assert client.post("/api/admin/tasks/99999/pause", headers=headers).status_code == 404
     assert client.post("/api/admin/tasks/99999/resume", headers=headers).status_code == 404
 
@@ -182,6 +198,7 @@ def test_pause_and_resume_404(client, db, headers):
 # ================= 统计与日志 =================
 
 def test_stats_with_tasks(client, db, headers):
+    """【正常流】统计数据正确汇总任务成败与各业务计数"""
     _tasks(db)  # 1 success + 1 failed，均在 1 天内运行（failed 的 last_run_at 为 None 不计近期）
     data = client.get("/api/admin/stats", headers=headers).json()
     assert data["task_total"] == 2 and data["task_success"] == 1 and data["task_failed"] == 1
@@ -192,6 +209,7 @@ def test_stats_with_tasks(client, db, headers):
 
 
 def test_stats_no_recent_tasks_success_rate_none(client, db, headers):
+    """【边界】近期无任务时成功率返回 null"""
     # recent_total 为 0 -> success_rate None 的条件分支
     db.add(CrawlTask(platform="jd", target="x", status="success",
                      last_run_at=datetime.now() - timedelta(days=30)))
@@ -201,6 +219,7 @@ def test_stats_no_recent_tasks_success_rate_none(client, db, headers):
 
 
 def test_logs_filters(client, db, headers):
+    """【正常流】日志列表支持按级别/模块过滤，覆盖 created_at 为空分支"""
     m3 = SystemLog(level="INFO", module="alert", message="m3")
     db.add_all([
         SystemLog(level="INFO", module="task", message="m1"),
@@ -219,6 +238,7 @@ def test_logs_filters(client, db, headers):
 
 
 def test_logs_pagination_params_422(client, db, headers):
+    """【异常流】非法分页参数被 schema 拦截返回 422"""
     assert client.get("/api/admin/logs", params={"page": 0}, headers=headers).status_code == 422
     assert client.get("/api/admin/logs", params={"page_size": 101}, headers=headers).status_code == 422
 
@@ -226,6 +246,7 @@ def test_logs_pagination_params_422(client, db, headers):
 # ================= 系统配置 =================
 
 def test_get_config(client, db, headers):
+    """【正常流】系统配置列表返回键值，覆盖 updated_at 为空分支"""
     db.add(SystemConfig(key="k1", value="v1", description="d1"))
     c2 = SystemConfig(key="k2", value="v2", description="d2")
     db.add(c2)
@@ -238,6 +259,7 @@ def test_get_config(client, db, headers):
 
 
 def test_set_config_update_and_create(client, db, headers):
+    """【正常流】配置项存在则更新、不存在则新建，均记操作日志"""
     db.add(SystemConfig(key="k1", value="old", description="d1"))
     db.commit()
     assert client.put("/api/admin/config", json={"key": "k1", "value": "new"},
@@ -252,6 +274,7 @@ def test_set_config_update_and_create(client, db, headers):
 # ================= 用户管理 =================
 
 def test_list_users_filters(client, db, headers):
+    """【正常流】用户列表支持关键词（用户名/邮箱 OR）过滤与分页"""
     make_user(db, username="findme", email="find@qq.com")
     make_user(db, username="other1", email="findtarget@qq.com")
     make_user(db, username="unrelated", email="u@qq.com")
@@ -266,6 +289,7 @@ def test_list_users_filters(client, db, headers):
 
 
 def test_set_user_status(client, db, headers, admin):
+    """【正常流】管理员修改用户状态并记录操作日志"""
     u = make_user(db, username="target1", email="t1@qq.com")
     r = client.post(f"/api/admin/users/{u.id}/status", params={"status": "disabled"},
                     headers=headers)
@@ -275,6 +299,7 @@ def test_set_user_status(client, db, headers, admin):
 
 
 def test_set_user_status_self_forbidden(client, db, headers, admin):
+    """【异常流】管理员不能禁用自己的账号"""
     # 不能禁用自己的条件分支
     r = client.post(f"/api/admin/users/{admin.id}/status", params={"status": "disabled"},
                     headers=headers)
@@ -282,6 +307,7 @@ def test_set_user_status_self_forbidden(client, db, headers, admin):
 
 
 def test_set_user_status_404_and_bad_pattern(client, db, headers):
+    """【异常流】用户不存在返回 404，非法状态值返回 422"""
     assert client.post("/api/admin/users/99999/status", params={"status": "active"},
                        headers=headers).status_code == 404
     assert client.post("/api/admin/users/1/status", params={"status": "banned"},
@@ -291,6 +317,7 @@ def test_set_user_status_404_and_bad_pattern(client, db, headers):
 # ================= 敏感词管理 =================
 
 def test_list_sensitive_words_filter(client, db, headers):
+    """【正常流】敏感词列表支持关键词过滤"""
     db.add_all([SensitiveWord(word="赌博", category="违法"),
                 SensitiveWord(word="诈骗", category="违法")])
     db.commit()
@@ -302,6 +329,7 @@ def test_list_sensitive_words_filter(client, db, headers):
 
 
 def test_add_sensitive_word(client, db, headers):
+    """【正常流】新增敏感词成功，分类缺省为通用"""
     r = client.post("/api/admin/sensitive-words", json={"word": "违禁品"},
                     headers=headers)
     assert r.json()["ok"] is True
@@ -311,11 +339,13 @@ def test_add_sensitive_word(client, db, headers):
 
 
 def test_add_sensitive_word_blank_400(client, db, headers):
+    """【异常流】空白敏感词被拒绝"""
     r = client.post("/api/admin/sensitive-words", json={"word": "   "}, headers=headers)
     assert r.status_code == 400 and "不能为空" in r.json()["detail"]
 
 
 def test_add_sensitive_word_duplicate_400(client, db, headers):
+    """【异常流】重复敏感词被拒绝"""
     db.add(SensitiveWord(word="赌博"))
     db.commit()
     r = client.post("/api/admin/sensitive-words", json={"word": "赌博", "category": "违法"},
@@ -324,6 +354,7 @@ def test_add_sensitive_word_duplicate_400(client, db, headers):
 
 
 def test_add_sensitive_words_batch(client, db, headers):
+    """【正常流】批量新增敏感词，空行/超长/重复被跳过并统计"""
     db.add(SensitiveWord(word="已有词"))
     db.commit()
     words = "新词1\n新词2\n\n   \n已有词\n" + "x" * 65
@@ -337,12 +368,14 @@ def test_add_sensitive_words_batch(client, db, headers):
 
 
 def test_add_sensitive_words_batch_category_default(client, db, headers):
+    """【边界】批量新增未指定分类时回退为通用"""
     r = client.post("/api/admin/sensitive-words/batch", json={"words": "默认类词"}, headers=headers)
     assert r.json()["added"] == 1
     assert db.query(SensitiveWord).filter(SensitiveWord.word == "默认类词").first().category == "通用"
 
 
 def test_delete_sensitive_word(client, db, headers):
+    """【正常流】删除敏感词成功并记录操作日志"""
     w = SensitiveWord(word="待删除")
     db.add(w)
     db.commit()
@@ -352,6 +385,7 @@ def test_delete_sensitive_word(client, db, headers):
 
 
 def test_delete_sensitive_word_404(client, db, headers):
+    """【异常流】删除不存在的敏感词返回 404"""
     assert client.delete("/api/admin/sensitive-words/99999", headers=headers).status_code == 404
 
 
@@ -402,6 +436,7 @@ def test_scheduler_job_collect_branches(monkeypatch, db):
 
 
 def test_scheduler_config_lookup(db):
+    """覆盖调度器配置读取：无配置取默认 / 有值取值 / 空值取默认"""
     # _config：无配置取默认值 / 有值取值 / 空值取默认值
     from app import scheduler as sched
 
@@ -416,6 +451,7 @@ def test_scheduler_config_lookup(db):
 
 
 def test_scheduler_job_collect_bad_config_survives(monkeypatch, db):
+    """【异常流】配置值非法时采集任务被外层异常兜底，不向外抛出"""
     # 配置值非法 -> 任务级外层异常兜底（不抛出）
     from app import scheduler as sched
     from conftest import TestingSession
@@ -428,6 +464,7 @@ def test_scheduler_job_collect_bad_config_survives(monkeypatch, db):
 
 
 def test_job_alerts_logs_generated(monkeypatch, db):
+    """【正常流】提醒任务生成后记日志，n=0 时不记日志"""
     from app import scheduler as sched
     from conftest import TestingSession
 
@@ -443,6 +480,7 @@ def test_job_alerts_logs_generated(monkeypatch, db):
 
 
 def test_scheduler_start_and_shutdown(monkeypatch):
+    """【正常流】调度器启动注册任务，重复启动不叠加任务"""
     from app import scheduler as sched
 
     monkeypatch.setattr(sched, "job_collect", lambda: None)
@@ -456,6 +494,7 @@ def test_scheduler_start_and_shutdown(monkeypatch):
 
 
 def test_job_alerts_exception_survives(monkeypatch, db):
+    """【异常流】提醒任务抛异常被兜底，不向外抛出"""
     # check_price_alerts 异常 -> 任务级兜底（不抛出）
     from app import scheduler as sched
     from conftest import TestingSession

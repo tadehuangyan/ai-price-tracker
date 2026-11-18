@@ -19,6 +19,7 @@ scheduler = BackgroundScheduler(timezone="Asia/Shanghai")
 
 
 def _config(db, key: str, default: str) -> str:
+    """读取系统配置项，未配置或值为空时返回默认值"""
     row = db.query(SystemConfig).get(key)
     return row.value if row and row.value else default
 
@@ -31,6 +32,7 @@ def job_collect():
     try:
         interval = int(_config(db, "crawl_interval_minutes", "1440"))
         cutoff = datetime.now() - timedelta(minutes=interval)
+        # 只采集从未采集或超过采集间隔未更新的链接；单轮限量避免任务执行过久
         listings = (
             db.query(Listing)
             .filter((Listing.last_crawled_at.is_(None)) | (Listing.last_crawled_at < cutoff))
@@ -38,6 +40,7 @@ def job_collect():
             .all()
         )
         for l in listings:
+            # 每条链接单独建采集任务记录并立即提交，保证失败可追溯
             task = CrawlTask(platform=l.platform, target=l.url or str(l.id), listing_id=l.id,
                              status="running")
             db.add(task)
@@ -50,6 +53,7 @@ def job_collect():
                     l.title = data.get("title") or l.title
                     from .models import PriceSnapshot
 
+                    # 写入价格快照，作为历史走势的数据来源
                     db.add(PriceSnapshot(listing_id=l.id, price=data["price"]))
                     task.status = "success"
                     task.success_count = 1
@@ -72,6 +76,7 @@ def job_collect():
 
 
 def job_alerts():
+    """周期性检查目标价，生成降价提醒（站内消息）并记录日志"""
     db = SessionLocal()
     try:
         n = check_price_alerts(db)
@@ -85,12 +90,14 @@ def job_alerts():
 
 
 def start_scheduler():
+    """注册并启动定时任务：启动后延迟补跑一轮采集，之后每 30 分钟采集、每 10 分钟检查降价提醒"""
     # 启动后延迟执行一轮采集（后台进行，不阻塞服务启动）
     scheduler.add_job(
         job_collect, "date",
         run_date=datetime.now() + timedelta(seconds=5),
         id="collect_once", replace_existing=True,
     )
+    # max_instances=1 防止上一轮未跑完时任务重入
     scheduler.add_job(job_collect, "interval", minutes=30, id="collect",
                       replace_existing=True, max_instances=1)
     scheduler.add_job(job_alerts, "interval", minutes=10, id="alerts",

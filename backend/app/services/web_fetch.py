@@ -34,13 +34,15 @@ def validate_url(url: str) -> str:
     try:
         ip = ipaddress.ip_address(host)
     except ValueError:
-        return url  # 主机名为公网域名（非 IP 字面量）
+        return url  # 主机名为公网域名（非 IP 字面量），交由 DNS 解析
+    # IP 字面量：私网/回环/链路本地地址一律拒绝（防 SSRF 探内网）
     if ip.is_private or ip.is_loopback or ip.is_link_local:
         raise ValueError("不允许访问内网地址")
     return url
 
 
 def _clean(fragment: str) -> str:
+    """去掉 HTML 标签并反转义实体，得到纯文本片段"""
     return html_module.unescape(re.sub(r"<[^>]+>", " ", fragment or "")).strip()
 
 
@@ -48,13 +50,15 @@ def html_to_text(page: str) -> tuple:
     """HTML -> (title, 正文文本)：去脚本/样式/标签，保留段落换行"""
     m = re.search(r"<title[^>]*>(.*?)</title>", page, re.S | re.I)
     title = _clean(m.group(1)) if m else ""
+    # 先剔除脚本/样式/注释等非正文内容，避免把代码当正文
     body = re.sub(r"<(script|style|noscript)[^>]*>.*?</\1>", " ", page, flags=re.S | re.I)
     body = re.sub(r"<!--.*?-->", " ", body, flags=re.S)
+    # 块级结束标签转为换行，保留段落结构
     body = re.sub(r"<br\s*/?>|</p>|</div>|</li>|</h[1-6]>|</tr>", "\n", body, flags=re.I)
-    body = re.sub(r"<[^>]+>", " ", body)
+    body = re.sub(r"<[^>]+>", " ", body)  # 其余标签一律去掉
     body = html_module.unescape(body)
-    body = re.sub(r"[ \t\u3000]+", " ", body)
-    body = re.sub(r"\n\s*\n+", "\n", body)
+    body = re.sub(r"[ \t\u3000]+", " ", body)  # 压缩半角/全角空白
+    body = re.sub(r"\n\s*\n+", "\n", body)  # 合并连续空行
     return title, body.strip()[:MAX_CHARS]
 
 
@@ -76,14 +80,15 @@ def search_snippets(query: str, limit: int = 5) -> list:
     resp = httpx.get(url, headers={"User-Agent": UA}, timeout=FETCH_TIMEOUT, follow_redirects=True)
     resp.raise_for_status()
     out = []
+    # 解析必应自然结果块 li.b_algo，逐块提取标题链接与摘要
     for block in re.findall(r'<li class="b_algo".*?(?:</li>|$)', resp.text, re.S):
         hm = re.search(r'<h2[^>]*>\s*<a[^>]*href="([^"]+)"[^>]*>(.*?)</a>', block, re.S)
         if not hm:
             continue
         link = hm.group(1)
         if not link.startswith("http"):
-            continue
-        pm = re.search(r"<p[^>]*>(.*?)</p>", block, re.S)
+            continue  # 跳过站内跳转等非直链
+        pm = re.search(r"<p[^>]*>(.*?)</p>", block, re.S)  # 摘要段落（可能不存在）
         out.append({
             "title": _clean(hm.group(2))[:80],
             "url": link,

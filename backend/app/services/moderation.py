@@ -21,7 +21,7 @@ def get_words(db: Session) -> list:
     """返回启用中的敏感词列表（带缓存）"""
     now = time.time()
     if _cache["words"] is not None and now < _cache["expires"]:
-        return _cache["words"]
+        return _cache["words"]  # 缓存未过期直接复用，避免每次输出都查库
     words = [
         w.word
         for w in db.query(SensitiveWord).filter(SensitiveWord.enabled.is_(True)).all()
@@ -41,7 +41,7 @@ def find_sensitive(text: str, db: Session) -> list:
     """返回 text 中命中的敏感词列表（去重，按词库顺序）"""
     if not text:
         return []
-    lowered = text.lower()
+    lowered = text.lower()  # 统一小写后做子串匹配，规避大小写变形
     hits = []
     for word in get_words(db):
         w = word.strip()
@@ -57,6 +57,7 @@ def max_word_len(db: Session) -> int:
 
 # ================= 提示注入检测（AI 安全） =================
 
+# 每条为 (正则, 标签)：覆盖忽略指令/篡改角色/套取提示词/越狱等常见注入手法
 INJECTION_PATTERNS = [
     (r"忽略(?:(?:以上|上面|之前|前面|上述|所有|全部|这些)(?:的)?){1,2}(?:指令|提示|内容|对话|设定|规则|限制)", "忽略既有指令"),
     (r"忘记(?:(?:以上|之前|此前|你的|所有)(?:的)?){1,2}(?:指令|设定|角色|规则|限制)", "篡改角色设定"),
@@ -67,7 +68,7 @@ INJECTION_PATTERNS = [
     (r"你现在(?:是|扮演|充当)(?:一个)?(?:没有|不受|无需)(?:任何)?(?:限制|约束|规则)", "越狱指令"),
     (r"(?:越狱|jailbreak|DAN\s*模式|开发者模式)", "越狱指令"),
 ]
-INJECTION_RES = [(re.compile(p, re.I), label) for p, label in INJECTION_PATTERNS]
+INJECTION_RES = [(re.compile(p, re.I), label) for p, label in INJECTION_PATTERNS]  # 预编译，供逐条匹配复用
 
 
 def find_injection(text: str) -> list:
