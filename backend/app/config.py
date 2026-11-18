@@ -4,6 +4,8 @@
 供数据库连接、鉴权与 AI 服务等模块统一引用。
 """
 import os
+from urllib.parse import quote_plus
+
 from dotenv import load_dotenv
 
 # 显式加载 backend/.env（按本文件路径定位，与启动目录无关）
@@ -28,7 +30,8 @@ LLM_MODEL = os.getenv("LLM_MODEL", "deepseek-chat")
 LLM_VISION_MODEL = os.getenv("LLM_VISION_MODEL", "")  # 多模态识图模型（OpenAI 兼容），为空回退默认
 
 # 拼接 SQLAlchemy 连接串（PyMySQL 驱动，utf8mb4 以支持 emoji 等 4 字节字符）
+# 对用户名/密码做 URL 编码，避免密码含 @ : / 等特殊字符时破坏连接串解析
 DATABASE_URL = (
-    f"mysql+pymysql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+    f"mysql+pymysql://{quote_plus(DB_USER)}:{quote_plus(DB_PASSWORD)}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
     f"?charset=utf8mb4"
 )

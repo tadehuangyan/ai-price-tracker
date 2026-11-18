@@ -77,13 +77,13 @@
               <span class="sk-line sk-price"></span>
             </div>
           </template>
-          <!-- 采集点行循环：比价条按最高价归一化，最低价盖"史低"印章 -->
+          <!-- 采集点行循环：比价条按最高价归一化，触及史低盖"史低"印章，最低报价盖"最低"印章 -->
           <div class="site-row" v-for="row in product.listings" :key="row.id">
             <span class="site-plat"><el-tag size="small">{{ platformName(row.platform) }}</el-tag></span>
             <span class="site-title" :title="row.title">{{ row.title }}</span>
             <div class="site-bar"><i :style="{ width: barWidth(row) }"></i></div>
             <b class="price site-price">￥{{ row.current_price }}</b>
-            <span class="seal seal-sm site-low" v-if="isLowest(row)">史低</span>
+            <span class="seal seal-sm site-low" v-if="sealText(row)">{{ sealText(row) }}</span>
             <span class="muted site-time">{{ row.last_crawled_at || '未采集' }}</span>
             <el-link v-if="row.url" :href="row.url" target="_blank" type="primary">前往购买</el-link>
           </div>
@@ -224,11 +224,18 @@ function barWidth(row: any) {
   if (!max || row.current_price == null) return '0%'
   return Math.max(6, Math.round((row.current_price / max) * 100)) + '%'
 }
-// 判断该采集点是否为全平台最低价（决定是否盖"史低"印章）
-function isLowest(row: any) {
+// 采集点印章文案：触及历史低价盖"史低"，仅当报价为全平台最低时盖"最低"（史低优先）
+function sealText(row: any): string {
+  const price = row.current_price
+  if (price == null) return ''
+  // 史低：当前报价已达到/低于价格趋势里的历史最低价（trend.min_price）
+  const histLow = trend.value?.min_price
+  if (histLow != null && price <= histLow + 0.01) return '史低'
+  // 最低：仅是当前各采集点中的最低报价（并非史低）
   const ls = product.value?.listings || []
-  if (!ls.length || row.current_price == null) return false
-  return row.current_price === Math.min(...ls.map((r: any) => r.current_price ?? Infinity))
+  const prices = ls.map((r: any) => r.current_price ?? Infinity)
+  if (ls.length > 1 && price === Math.min(...prices)) return '最低'
+  return ''
 }
 
 // 平台编码 -> 中文名映射（采集点标签展示用）
@@ -314,7 +321,8 @@ async function loadLive() {
       image_url: data.image_url || product.value.image_url,
       category: '',
       brand: '',
-      min_price: data.min_price ?? product.value.min_price,
+      // 头部大字价 = 当前最低报价（与本地库 min_price 语义一致）；史低价由 trend.min_price 在铭牌标签单独展示
+      min_price: data.price || product.value.min_price,
       listings: [
         {
           id: 0,

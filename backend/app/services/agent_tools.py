@@ -6,6 +6,7 @@
   不抛异常、不执行任意代码；写操作（set_price_alert）需登录用户。
 """
 import json
+import re
 
 from sqlalchemy.orm import Session
 
@@ -344,12 +345,32 @@ def _query_knowledge(db: Session, user, args: dict) -> str:
 
 
 def _update_user_profile(db: Session, user, args: dict) -> str:
-    """记录一条用户画像事实（消费偏好/预算/关注/习惯），需登录"""
+    """记录一条用户画像事实（消费偏好/预算/关注/习惯），需登录
+
+    参数容错：除 schema 约定的 category/note 外，也接受模型偶发使用的
+    updates/profile/preferences 键（字符串或键值对象）。
+    """
     from . import user_profile
 
     if user is None:
         return _j({"ok": False, "error": "需要登录用户才能记录画像"})
-    result = user_profile.record_note(user.id, args.get("category"), args.get("note"))
+    category = args.get("category")
+    note = args.get("note")
+    if not note:
+        payload = args.get("updates") or args.get("profile") or args.get("preferences")
+        if isinstance(payload, dict):
+            category = category or next(iter(payload), None)
+            note = "；".join(f"{k}：{v}" for k, v in payload.items())
+        elif isinstance(payload, str):
+            note = payload
+    if not note:
+        # 兜底：整个参数对象当作事实键值对（排除 category）
+        kv = {k: v for k, v in args.items()
+              if k != "category" and isinstance(v, (str, int, float))}
+        if kv:
+            category = category or next(iter(kv), None)
+            note = "；".join(f"{k}：{v}" for k, v in kv.items())
+    result = user_profile.record_note(user.id, category, note)
     return _j(result)
 
 
@@ -407,6 +428,16 @@ HANDLERS = {
 }
 
 
+def canonical_name(name: str) -> str:
+    """工具名归一化：部分模型会为并行调用给工具名追加 _1/_2 序号后缀，
+    剥离后缀后再匹配白名单，命中则返回注册名，否则原样返回"""
+    n = (name or "").strip()
+    if n in HANDLERS:
+        return n
+    base = re.sub(r"_\d+$", "", n)
+    return base if base in HANDLERS else n
+
+
 def dispatch(db: Session, user: User | None, name: str, arguments: str) -> str:
     """白名单分发执行工具调用，任何失败都返回错误文本而非抛异常"""
     try:
@@ -416,6 +447,7 @@ def dispatch(db: Session, user: User | None, name: str, arguments: str) -> str:
             raise ValueError("参数应为 JSON 对象")
     except ValueError as e:
         return _j({"error": f"工具参数解析失败：{e}"})
+    name = canonical_name(name)  # 容错模型偶发的 _1/_2 序号后缀
     fn = HANDLERS.get(name)
     if fn is None:
         return _j({"error": f"未知工具：{name}"})
