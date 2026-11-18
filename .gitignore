@@ -65,3 +65,5 @@ miniapp/
 *.docx
 *.zip
 template6_text.txt
+### IDE ###
+.idea/
