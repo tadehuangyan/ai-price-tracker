@@ -27,3 +27,41 @@ bin/
 
 ### Mac OS ###
 .DS_Store
+
+### 敏感配置（严禁提交） ###
+.env
+.env.local
+
+### Python ###
+__pycache__/
+*.pyc
+*.pyo
+.coverage
+htmlcov/
+.venv/
+venv/
+
+### 数据与运行时产物 ###
+backend/ms-playwright/
+backend/storage/uploads/
+*.db
+
+### Node / 前端 ###
+node_modules/
+frontend/dist/
+
+### 本地工具与截图 ###
+.pai/
+.screenshots/
+.trae-html-share-packages/
+design-previews/
+design-assets/
+
+### 课程开发文档与小程序端（不随仓库发布） ###
+doc_assets/
+docgen/
+测试用例/
+miniapp/
+*.docx
+*.zip
+template6_text.txt

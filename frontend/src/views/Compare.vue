@@ -11,53 +11,23 @@
     <section class="spec-card stage reveal" data-delay="100">
       <div class="tape stage-tape"></div>
       <div class="kicker"><span class="pin-dot"></span>BENCH · 标本上台</div>
-      <div class="stage-row">
-        <div class="picker">
-          <el-select
-            v-model="selected"
-            multiple
-            filterable
-            remote
-            reserve-keyword
-            :remote-method="searchProducts"
-            :loading="searching"
-            placeholder="搜索并选择 1~5 个商品进行对比"
-            style="width: 560px"
-            :multiple-limit="5"
-          >
-            <el-option v-for="o in options" :key="o.id" :value="o.id" :label="o.name" />
-          </el-select>
-          <el-radio-group v-model="days" size="default" class="days-group">
-            <el-radio-button :label="30">30 天</el-radio-button>
-            <el-radio-button :label="90">90 天</el-radio-button>
-            <el-radio-button :label="180">180 天</el-radio-button>
-            <el-radio-button :label="365">一年</el-radio-button>
-          </el-radio-group>
-        </div>
-        <el-button
-          class="mag-btn"
-          type="primary"
-          :loading="loading"
-          @click="doCompare"
-          :disabled="!selected.length"
+      <!-- 统一添加入口：输入商品名搜索 / 粘贴链接自动收录加入 -->
+      <div class="stage-row stage-adds">
+        <el-select
+          :key="selectKey"
+          v-model="selected"
+          multiple
+          filterable
+          remote
+          reserve-keyword
+          :remote-method="searchProducts"
+          :loading="searching"
+          placeholder="搜索商品名或粘贴商品链接，回车添加（1~5 个）"
+          class="add-select"
+          :multiple-limit="5"
         >
-          开始对比
-        </el-button>
-      </div>
-      <!-- 链接收录 / 收藏商品加入对比 -->
-      <div class="stage-row stage-extra">
-        <div class="link-add">
-          <el-input
-            v-model="linkUrl"
-            placeholder="粘贴商品链接，收录后加入对比（京东/淘宝等）"
-            clearable
-            class="link-input"
-            @keyup.enter="addByLink"
-          >
-            <template #prefix><el-icon><Link /></el-icon></template>
-          </el-input>
-          <el-button class="mag-btn" :loading="linkLoading" @click="addByLink">收录并加入</el-button>
-        </div>
+          <el-option v-for="o in options" :key="o.id" :value="o.id" :label="o.name" />
+        </el-select>
         <el-popover placement="bottom-end" :width="360" trigger="click" v-model:visible="favVisible">
           <template #reference>
             <el-button class="mag-btn">＋ 收藏商品</el-button>
@@ -78,6 +48,25 @@
             <el-empty v-if="!trackings.length" description="暂无收藏商品" :image-size="50" />
           </div>
         </el-popover>
+      </div>
+      <div class="stage-row stage-actions">
+        <div class="picker">
+          <el-radio-group v-model="days" size="default" class="days-group">
+            <el-radio-button :label="30">30 天</el-radio-button>
+            <el-radio-button :label="90">90 天</el-radio-button>
+            <el-radio-button :label="180">180 天</el-radio-button>
+            <el-radio-button :label="365">一年</el-radio-button>
+          </el-radio-group>
+        </div>
+        <el-button
+          class="mag-btn"
+          type="primary"
+          :loading="loading"
+          @click="doCompare"
+          :disabled="!selected.length"
+        >
+          开始对比
+        </el-button>
       </div>
       <p class="annot stage-note">选 1~5 件标本置于台上，同台列价，一观高下。</p>
     </section>
@@ -233,11 +222,10 @@ const result = ref<any>(null)
 const barEl = ref<HTMLDivElement>()
 let barChart: echarts.ECharts | null = null
 
-// —— 链接收录 / 收藏商品加入对比 ——
+// —— 统一添加入口：搜索 / 链接收录 / 收藏商品 ——
 const placeholder =
   'https://trae-api-cn.mchost.guru/api/ide/v1/text_to_image?prompt=minimal%20white%20product%20placeholder%20shopping%20bag%20flat%20design&image_size=square'
-const linkUrl = ref('')
-const linkLoading = ref(false)
+const selectKey = ref(0) // 收录完成后重置输入框（清掉已粘贴的链接文本）
 const favVisible = ref(false)
 const trackings = ref<any[]>([])
 
@@ -255,14 +243,9 @@ function pushSelected(pid: number, name: string) {
   selected.value.push(pid)
 }
 
-// 粘贴链接 -> 收录入库（实时爬取慢慢买）-> 加入对比台
-async function addByLink() {
-  const url = linkUrl.value.trim()
-  if (!/^https?:\/\//i.test(url)) {
-    ElMessage.warning('请粘贴合法的商品链接（http/https）')
-    return
-  }
-  linkLoading.value = true
+// 粘贴链接 -> 后台静默收录入库（实时爬取慢慢买）-> 自动加入对比台
+async function importLink(url: string) {
+  searching.value = true
   try {
     const { data } = await api.post('/api/products/import', { url }, { timeout: 60000 })
     let name = `商品 #${data.product_id}`
@@ -274,11 +257,11 @@ async function addByLink() {
     }
     pushSelected(data.product_id, name)
     ElMessage.success(data.message || '已收录并加入对比')
-    linkUrl.value = ''
+    selectKey.value++ // 重置输入框，清掉已粘贴的链接文本
   } catch (e) {
     ElMessage.error(errMsg(e))
   } finally {
-    linkLoading.value = false
+    searching.value = false
   }
 }
 
@@ -337,11 +320,17 @@ async function playPage() {
   refreshScroll()
 }
 
+// 统一输入入口：商品链接 -> 静默收录并加入；关键词 -> 远程搜索
 async function searchProducts(q: string) {
-  if (!q) return
+  const kw = q.trim()
+  if (!kw) return
+  if (/^https?:\/\//i.test(kw)) {
+    await importLink(kw)
+    return
+  }
   searching.value = true
   try {
-    const { data } = await api.get('/api/products/search', { params: { keyword: q, page_size: 20 } })
+    const { data } = await api.get('/api/products/search', { params: { keyword: kw, page_size: 20 } })
     options.value = data.items
   } finally {
     searching.value = false
@@ -472,10 +461,10 @@ onUnmounted(() => {
 .days-group { margin-left: 0; }
 .stage-note { margin: 12px 0 0; font-size: 12.5px; }
 
-/* —— 链接收录 / 收藏商品加入 —— */
-.stage-extra { margin-top: 12px; }
-.link-add { display: flex; align-items: center; gap: 10px; flex: 1; }
-.link-input { width: 460px; max-width: 100%; }
+/* —— 统一添加入口行：搜索 / 链接 / 收藏 —— */
+.stage-adds { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.stage-adds :deep(.add-select) { flex: 1; min-width: 320px; }
+.stage-actions { margin-top: 12px; }
 .fav-list { max-height: 280px; overflow-y: auto; }
 .panel-title {
   font-family: var(--mono); font-size: 10px; letter-spacing: 0.16em;

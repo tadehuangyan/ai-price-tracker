@@ -31,6 +31,9 @@
             </span>
           </template>
         </el-input>
+        <el-button size="large" class="mag-btn vis-btn" @click="pickVisionImage">
+          <el-icon style="margin-right: 4px"><Camera /></el-icon>识图找同款
+        </el-button>
       </div>
       <!-- 索引卡：分类 / 排序 -->
       <div class="filters">
@@ -114,6 +117,42 @@
     </div>
 
     <div class="colophon page-foot">PRICE TRACE · 标本手记 —— 每一件商品，都是一枚被记录的价格标本。</div>
+
+    <!-- 识图找同款（多模态闭环：图片 -> 视觉识别 -> 候选商品 -> 查看详情） -->
+    <input ref="visInput" type="file" accept="image/*" multiple style="display: none" @change="onVisPick" />
+    <el-dialog v-model="visionVisible" title="识图找同款" width="480px">
+      <div v-if="visionLoading" class="vision-loading">
+        <span class="rec-label">正在识别图片中的商品</span>
+        <span class="pen-dot"></span><span class="pen-dot"></span><span class="pen-dot"></span>
+      </div>
+      <template v-else-if="visionResult">
+        <div class="kicker"><span class="pin-dot"></span>识别结果<span v-if="visionResult.keywords">：{{ visionResult.keywords }}</span></div>
+        <p v-if="visionResult.message" class="muted">{{ visionResult.message }}</p>
+        <div class="vision-list">
+          <div
+            v-for="(c, i) in visionResult.candidates"
+            :key="i"
+            class="vision-item"
+            @click="pickCandidate(c)"
+          >
+            <img :src="c.image || placeholder" class="vision-img" />
+            <div class="vision-info">
+              <div class="vision-name">{{ c.name }}</div>
+              <div class="vision-meta">
+                <span v-if="c.price" class="price">￥{{ c.price }}</span>
+                <span class="src-tag">{{ c.source }}<template v-if="c.platform"> · {{ c.platform }}</template></span>
+              </div>
+            </div>
+            <el-button size="small" type="primary" plain round>查看</el-button>
+          </div>
+          <el-empty
+            v-if="!visionResult.candidates?.length"
+            description="没有找到候选商品，换个图试试"
+            :image-size="60"
+          />
+        </div>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -227,6 +266,79 @@ async function loadCategories() {
   categories.value = data
 }
 
+// —— 识图找同款（与 AI 导购页同款能力：视觉识别 -> 候选 -> 查看详情） ——
+interface VisionCandidate {
+  product_id: number | null
+  name: string
+  price: number | null
+  image: string
+  platform: string
+  url?: string
+  source: string
+}
+const visInput = ref<HTMLInputElement>()
+const visionVisible = ref(false)
+const visionLoading = ref(false)
+const visionResult = ref<{ keywords: string; message?: string; candidates: VisionCandidate[] } | null>(null)
+
+function pickVisionImage() {
+  visInput.value?.click()
+}
+
+function readDataURL(f: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result))
+    reader.onerror = () => reject(reader.error)
+    reader.readAsDataURL(f)
+  })
+}
+
+async function onVisPick(e: Event) {
+  const el = e.target as HTMLInputElement
+  const files = Array.from(el.files || []).slice(0, 2)
+  el.value = ''
+  if (!files.length) return
+  const images = await Promise.all(files.map(readDataURL))
+  visionVisible.value = true
+  visionLoading.value = true
+  visionResult.value = null
+  try {
+    const { data } = await api.post('/api/advisor/image_search', { images }, { timeout: 90000 })
+    if (data.ok === false) {
+      visionVisible.value = false
+      ElMessage.error(data.error || '识图失败')
+      return
+    }
+    visionResult.value = { keywords: data.keywords || '', message: data.message, candidates: data.candidates || [] }
+  } catch (err) {
+    visionVisible.value = false
+    ElMessage.error('识图失败：' + errMsg(err))
+  } finally {
+    visionLoading.value = false
+  }
+}
+
+// 候选 -> 本地库商品进详情；联网候选走实时详情
+function pickCandidate(c: VisionCandidate) {
+  visionVisible.value = false
+  if (c.product_id) {
+    router.push(`/product/${c.product_id}`)
+    return
+  }
+  router.push({
+    path: '/product/live',
+    query: {
+      url: c.url || '',
+      title: c.name || '',
+      price: c.price != null ? String(c.price) : '',
+      image: c.image || '',
+      platform: c.platform || '',
+      deal: '0',
+    },
+  })
+}
+
 // 点击商品 -> 实时详情页（慢慢买数据即查即看，追踪/比价时才入库）
 function openProduct(p: any) {
   router.push({
@@ -272,6 +384,33 @@ onUnmounted(() => {
 .t-br { bottom: -8px; right: 40px; transform: rotate(-3deg); }
 .btn-magnet { display: inline-flex; }
 .btn-magnet :deep(.el-button) { margin-left: 0; }
+.search-row { display: flex; align-items: stretch; gap: 10px; }
+.search-row :deep(.el-input) { flex: 1; }
+.vis-btn { flex-shrink: 0; letter-spacing: 0.1em; }
+
+/* —— 识图找同款 —— */
+.vision-loading { display: flex; align-items: center; gap: 5px; height: 40px; }
+.vision-list { max-height: 320px; overflow-y: auto; margin-top: 8px; }
+.vision-item {
+  display: flex; align-items: center; gap: 10px; padding: 8px;
+  border-radius: 2px; cursor: pointer; border-bottom: 1px dashed var(--line);
+  transition: background 0.15s;
+}
+.vision-item:last-child { border-bottom: none; }
+.vision-item:hover { background: var(--green-soft); }
+.vision-img {
+  width: 42px; height: 42px; object-fit: contain; background: var(--paper-2);
+  border: 1px solid var(--line); border-radius: 1px; flex-shrink: 0;
+}
+.vision-info { flex: 1; min-width: 0; }
+.vision-name {
+  font-family: var(--kai); font-size: 13px; color: var(--ink); line-height: 1.5;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.vision-meta { display: flex; gap: 8px; align-items: center; margin-top: 2px; font-size: 12px; }
+.src-tag {
+  font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em; color: var(--ink-faint);
+}
 
 /* —— 索引卡：分类 / 排序 —— */
 .filters {
