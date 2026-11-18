@@ -169,110 +169,6 @@ def llm_chat_stream(messages: list, temperature: float = 0.6, timeout: int = 90,
                     yield text
 
 
-# ---- 文本式工具调用兼容层 ----
-# 部分轻量模型（如免费档 flash 版）不走原生 Function Calling，而是把工具调用
-# 以纯文本标签写进回答。若不拦截，标签 JSON 会原文漏给用户。这里统一识别、剥离，
-# 并转成标准工具调用事件，保证原生/文本两种风格的模型体验一致。
-TOOL_TAG_BLOCK_RE = re.compile(r"<tool_call[^>]*>(.*?)</tool_call\s*>", re.S | re.I)
-OPEN_TAG_RE = re.compile(r"<tool_call[^>]*>", re.I)
-
-
-def _parse_text_tool_call(body: str):
-    """把文本式工具调用体解析为 {name, arguments}，解析失败返回 None
-
-    兼容两种常见写法：
-    1) JSON：{"function": "web_search", "parameter": {...}}
-    2) XML：function / parameter 子标签写法
-    """
-    body = body.strip()
-    if body.startswith("{"):
-        try:
-            obj = json.loads(body)
-        except ValueError:
-            return None
-        if not isinstance(obj, dict):
-            return None
-        name = str(obj.get("function") or obj.get("name") or "").strip()
-        args = obj.get("parameter") or obj.get("parameters") or obj.get("arguments") or {}
-        if isinstance(args, str):
-            try:
-                args = json.loads(args)
-            except ValueError:
-                args = {"input": args}
-        if name and isinstance(args, dict):
-            return {"name": name, "arguments": json.dumps(args, ensure_ascii=False)}
-        return None
-    fn = re.search(r"<function(?:_name)?\s*>\s*([^<]+?)\s*</function\s*>", body, re.I)
-    if not fn:
-        return None
-    args: dict = {}
-    for m in re.finditer(r"<parameter(?:\s+name=[\x22\x27]([^\x22\x27]+)[\x22\x27])?\s*>(.*?)</parameter\s*>", body, re.S | re.I):
-        args[m.group(1) or f"arg{len(args) + 1}"] = m.group(2).strip()
-    for m in re.finditer(r"<param_([^>\s/]+)\s*>(.*?)</param_\1\s*>", body, re.S | re.I):
-        args[m.group(1)] = m.group(2).strip()
-    return {"name": fn.group(1).strip(), "arguments": json.dumps(args, ensure_ascii=False)}
-
-
-class _TextToolCallFilter:
-    """流式拦截文本式工具调用：feed 增量拿干净文本，flush 收尾，calls 为解析结果
-
-    标签可能跨流分块到达：完整标签立即剥离解析；未闭合的开标签及疑似半个
-    标签的尾部前缀暂扣到下一块再判定；解析失败的标签直接丢弃（宁可少显示，
-    也不给用户看原始 JSON）。
-    """
-
-    def __init__(self):
-        self.pending = ""
-        self.calls: list = []
-
-    def feed(self, text: str) -> str:
-        self.pending += text
-        out = []
-        while True:
-            m = TOOL_TAG_BLOCK_RE.search(self.pending)
-            if not m:
-                break
-            out.append(self._clean(self.pending[: m.start()]))
-            call = _parse_text_tool_call(m.group(1))
-            if call:
-                self.calls.append(call)
-            self.pending = self.pending[m.end():]
-        # 未闭合开标签之后的内容全部暂扣（含关闭标签前缀），防止半截标签漏给用户
-        m = OPEN_TAG_RE.search(self.pending)
-        hold = len(self.pending) - m.start() if m else 0
-        if not hold:
-            j = self.pending.rfind("<")
-            if j != -1:
-                tail = self.pending[j:].lower()
-                if "<tool_call".startswith(tail) or tail.startswith("<tool_call"):
-                    hold = len(self.pending) - j
-        if hold:
-            out.append(self._clean(self.pending[:-hold]))
-            self.pending = self.pending[-hold:]
-        else:
-            out.append(self._clean(self.pending))
-            self.pending = ""
-        return "".join(out)
-
-    def flush(self) -> str:
-        pending, self.pending = self.pending, ""
-        m = re.search(r"<tool_call[^>]*>(.*)$", pending, re.S | re.I)
-        if m:
-            # 流结束仍未闭合的残留标签：剥掉末尾未完成的关闭前缀后解析，原文绝不漏给用户
-            call = _parse_text_tool_call(re.sub(r"</?\w*$", "", m.group(1)))
-            if call:
-                self.calls.append(call)
-            return ""
-        m2 = re.search(r"<tool_call", pending, re.I)
-        if m2:
-            return self._clean(pending[: m2.start()])
-        return self._clean(pending)
-
-    @staticmethod
-    def _clean(text: str) -> str:
-        """丢弃游离的关闭标签（正常成对标签已在块匹配时剥离）"""
-        return re.sub(r"</tool_call\s*>", "", text, flags=re.I)
-
 def llm_stream_ex(messages: list, tools: list = None, temperature: float = 0.6, timeout: int = 90, ai_config: dict = None):
     """扩展流式调用（Agent 编排用）：yield 事件 dict
 
@@ -280,19 +176,10 @@ def llm_stream_ex(messages: list, tools: list = None, temperature: float = 0.6, 
     - {"type": "tool_calls", "calls": [{id, name, arguments}]}：一轮流结束时若模型请求调用工具则 yield 一次
 
     tools 为空时委托 llm_chat_stream，保持纯文本流语义（便于测试与降级）。
-    无论哪种模式，正文里的文本式工具调用标签都会被拦截并转为 tool_calls 事件。
     """
-    tag_filter = _TextToolCallFilter()
     if not tools:
         for t in llm_chat_stream(messages, temperature=temperature, timeout=timeout, ai_config=ai_config):
-            clean = tag_filter.feed(t)
-            if clean:
-                yield {"type": "text", "text": clean}
-        tail = tag_filter.flush()
-        if tail:
-            yield {"type": "text", "text": tail}
-        if tag_filter.calls:
-            yield {"type": "tool_calls", "calls": tag_filter.calls}
+            yield {"type": "text", "text": t}
         return
     base = (ai_config or {}).get("api_base") or LLM_API_BASE
     key = (ai_config or {}).get("api_key") or LLM_API_KEY
@@ -336,9 +223,7 @@ def llm_stream_ex(messages: list, tools: list = None, temperature: float = 0.6, 
                 delta = (choices[0].get("delta") if choices else {}) or {}
                 text = delta.get("content")
                 if text:
-                    clean = tag_filter.feed(text)
-                    if clean:
-                        yield {"type": "text", "text": clean}
+                    yield {"type": "text", "text": text}
                 # tool_calls 增量分片下发（id/name 只出现一次、arguments 分多段），
                 # 按 index 归位到对应槽位累积拼接
                 for tc in (delta.get("tool_calls") or []):
@@ -351,13 +236,9 @@ def llm_stream_ex(messages: list, tools: list = None, temperature: float = 0.6, 
                         slot["name"] = fn["name"]
                     if fn.get("arguments"):
                         slot["arguments"] += fn["arguments"]
-    tail = tag_filter.flush()
-    if tail:
-        yield {"type": "text", "text": tail}
-    calls = [acc[i] for i in sorted(acc)] + tag_filter.calls
-    if calls:
-        # 整轮流结束后一次性 yield 完整的工具调用列表（原生优先，文本式解析结果在后）
-        yield {"type": "tool_calls", "calls": calls}
+    if acc:
+        # 整轮流结束后一次性 yield 完整的工具调用列表（按 index 排序保持模型给出的顺序）
+        yield {"type": "tool_calls", "calls": [acc[i] for i in sorted(acc)]}
 
 
 # ================= 聊天模式（REQ 智能导购对话） =================
@@ -767,7 +648,8 @@ def chat_reply_stream(
                  "function": {"name": c["name"], "arguments": c.get("arguments") or "{}"}}
                 for i, c in enumerate(calls)]}]
             for i, c in enumerate(calls):
-                name = c.get("name") or ""
+                # 归一化工具名（容错模型偶发的 _1/_2 序号后缀），前端卡片标签按注册名展示
+                name = agent_tools.canonical_name(c.get("name") or "")
                 yield {"kind": "tool", "name": name, "status": "running"}
                 # 白名单分发执行工具，失败以错误文本回填（不中断对话）
                 result = agent_tools.dispatch(db, user, name, c.get("arguments") or "{}")
@@ -787,8 +669,6 @@ def chat_reply_stream(
                 # 工具轮次已达上限：不再提供工具，强制基于已收集信息收尾作答
                 for ev in llm_stream_ex(cur, tools=None,
                                         temperature=0.6, timeout=90, ai_config=ai_config):
-                    if ev["type"] == "tool_calls":
-                        continue  # 工具轮次已达上限，文本式工具请求不再执行
                     yield {"kind": "text", "text": ev["text"]}
                 return
 

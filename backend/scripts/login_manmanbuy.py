@@ -41,101 +41,64 @@ def main():
         ctx.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
         page = ctx.new_page()
 
-        api_resps = []
-        page.on(
-            "response",
-            lambda r: api_resps.append(r)
-            if ("tool.manmanbuy.com/api.ashx" in r.url)
-            else None,
-        )
+        # 打开页面并触发登录弹窗（先加载完，让常规 cookie 种下）
+        page.goto("https://tool.manmanbuy.com/HistoryLowest.aspx", timeout=40000, wait_until="domcontentloaded")
+        page.wait_for_timeout(2500)
+        page.fill("#historykey", JD_URL)
+        page.click("#searchHistory")
+        page.wait_for_timeout(3500)
 
+        # 基线 cookie 必须在页面完全加载后再抓，否则会把 session/csrf 误判为登录 cookie
         base_cookies = {c["name"] for c in ctx.cookies()}
 
         def has_new_login_cookie():
             names = {c["name"] for c in ctx.cookies()}
             new = names - base_cookies
-            # 登录后通常会出现用户相关 cookie（排除统计类）
-            ignore = {"Hm_lvt_", "Hm_lpvt", "_ga", "_gid", "_gat"}
+            # 登录后通常会出现用户相关 cookie（排除统计/性能类）
+            ignore = ("Hm_lvt", "Hm_lpvt", "_ga", "_gid", "_gat", "ASP.NET_SessionId")
             return any(not any(i in n for i in ignore) for n in new)
 
         def header_logged_in():
+            """页头出现『退出』类字样才是真登录（仅『请登录消失』易误判）"""
             try:
-                t = page.locator("body").inner_text()[:500]
-                return "请登录" not in t and "免费注册" not in t
+                t = page.locator("body").inner_text()[:800]
+                return ("退出" in t) or ("退出登录" in t) or ("我的订单" in t) or ("个人中心" in t)
             except Exception:
                 return False
 
-        page.goto("https://tool.manmanbuy.com/HistoryLowest.aspx", timeout=40000, wait_until="domcontentloaded")
-        page.wait_for_timeout(2000)
-        page.fill("#historykey", JD_URL)
-        page.click("#searchHistory")
-        page.wait_for_timeout(3000)
-
         print("=" * 60)
         print("请在打开的浏览器窗口中完成登录（可能弹出微信扫码框）")
-        print("登录成功后脚本会自动保存登录态并退出")
+        print("登录成功后脚本会自动保存登录态并退出（最多等 5 分钟）")
         print("=" * 60)
         sys.stdout.flush()
 
         deadline = time.time() + 300  # 5 分钟
         logged_in = False
+        tick = 0
         while time.time() < deadline:
             page.wait_for_timeout(2000)
-            # 信号1：真正的历史数据接口 api.ashx 返回了 data
-            for r in api_resps:
-                try:
-                    body = r.text()
-                except Exception:
-                    continue
-                if '"data"' in body and '"data":null' not in body:
-                    print("检测到历史数据接口响应:", r.url[:120])
-                    logged_in = True
-                    break
-            if logged_in:
-                break
-            # 信号2：出现新的登录 cookie
+            tick += 1
+            # 只信『新登录 cookie』或『页头出现退出/我的』——匿名接口返回数据不算登录
             if has_new_login_cookie():
                 print("检测到新的登录 cookie")
                 logged_in = True
                 break
-            # 信号3：页头不再显示“请登录”
             if header_logged_in():
                 print("检测到页头已登录")
                 logged_in = True
                 break
-            # 如果登录弹窗关闭了且未登录，重新触发查询唤起弹窗
-            try:
-                if page.locator("iframe").count() == 0 and page.locator("#historykey").is_visible():
-                    if not api_resps:
-                        page.click("#searchHistory")
-            except Exception:
-                pass
+            if tick % 5 == 0:
+                print("等待扫码登录中...（请在浏览器窗口内完成登录）")
+                sys.stdout.flush()
 
         if not logged_in:
             print("等待超时，未检测到登录成功")
             browser.close()
             sys.exit(1)
 
-        # 登录成功：再查一次拿数据验证
-        if not api_resps:
-            try:
-                page.fill("#historykey", JD_URL)
-                page.click("#searchHistory")
-                for _ in range(15):
-                    page.wait_for_timeout(1000)
-                    if api_resps:
-                        break
-            except Exception:
-                pass
-
+        # 登录成功：保存登录态
         ctx.storage_state(path=STORAGE)
         print("登录态已保存到:", STORAGE)
-        # 打印历史接口响应样例
-        for r in api_resps[:2]:
-            try:
-                print("样例响应:", r.text()[:600])
-            except Exception:
-                pass
         try:
             page.wait_for_timeout(1000)
             page.screenshot(path=os.path.join(BASE, "shot_after_login.png"))

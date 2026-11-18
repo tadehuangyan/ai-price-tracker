@@ -114,7 +114,6 @@
             </div>
           </el-tab-pane>
         </el-tabs>
-        <div class="card-foot annot">管理员账号：admin / admin123456</div>
       </section>
     </div>
 

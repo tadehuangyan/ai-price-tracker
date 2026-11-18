@@ -135,6 +135,33 @@ def _fetch_live_items(keyword: str, category: str, n: int) -> list:
         from ..services.crawler.manmanbuy import browse_category
 
         items = browse_category(category.strip(), limit=n)
+        if not items:
+            # 分类页（zhekou 子域名）被反爬滑块拦截时回退到比价搜索，避免页面空白
+            items = _search_fallback(category.strip(), n)
+    return items
+
+
+# 分类 -> 回退搜索关键词（分类页被反爬拦截时用比价搜索兜底展示）
+_CATEGORY_KEYWORDS = {
+    "cf3": "手机", "cf17": "笔记本电脑", "cf6": "冰箱", "cf16": "四件套",
+    "cf5": "沙发", "cf12": "羽绒服", "cf9": "运动鞋", "cf18": "洗面奶",
+    "cf15": "奶粉", "cf19": "跑步鞋", "cf8": "白酒", "cf10": "苹果",
+    "cf1": "维生素", "cf7": "机械键盘", "cf2": "绿植", "cf4": "行车记录仪",
+    "cf13": "手机", "cf11": "礼品卡", "cf14": "手机",
+}
+
+
+def _search_fallback(category: str, n: int) -> list:
+    """分类页抓取失败时，用该分类代表关键词走比价搜索返回商品"""
+    from ..services.crawler.manmanbuy import discover_products
+
+    kw = _CATEGORY_KEYWORDS.get(category, "手机")
+    try:
+        items = discover_products(kw, limit=n)
+    except Exception:
+        return []
+    for i in items:
+        i["kind"] = "product"
     return items
 
 
