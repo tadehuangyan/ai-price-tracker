@@ -180,7 +180,8 @@ def live_search(
 
     key = (keyword.strip(), category.strip())
     cached = _live_cache.get(key)
-    if not refresh and cached:
+    # 缓存批次条数不足 n 视为未命中（旧批次可能只抓到较少条目），直接重新抓取取满
+    if not refresh and cached and len(cached[1]) >= n:
         if time.time() - cached[0] < LIVE_CACHE_TTL:
             return {"keyword": keyword, "category": category, "items": cached[1][:n]}
         if _mark_refreshing(key):

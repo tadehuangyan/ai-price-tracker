@@ -77,7 +77,7 @@
 
     <!-- 加载占位：骨架标本卡（遮盖实时爬取的空白期） -->
     <div v-if="loading && !allItems.length" class="grid skeleton">
-      <div v-for="i in 12" :key="i" class="sk-card spec-card">
+      <div v-for="i in 18" :key="i" class="sk-card spec-card">
         <div class="sk-line sk-lot"></div>
         <div class="sk-img"></div>
         <div class="sk-line"></div>
@@ -92,7 +92,7 @@
         v-for="(p, i) in displayItems"
         :key="p.url"
         class="item spec-card reveal"
-        :data-delay="(i % 6) * 70"
+        :data-delay="(i % 9) * 70"
         @click="openProduct(p)"
       >
         <span class="pin lot-pin"></span>
@@ -184,7 +184,7 @@ const category = ref('')
 const sort = ref('random')
 // 当前页码（客户端分页，数据一次性取回）
 const page = ref(1)
-const pageSize = 12
+const pageSize = 18 // 每页 2 行 × 9 列
 // 慢慢买实时检索到的全量商品，排序与分页均在客户端完成
 const allItems = ref<any[]>([])
 // 分类索引列表（供分类筛选单选组使用）
@@ -266,7 +266,7 @@ async function search(p = 1) {
   loading.value = true
   try {
     const { data } = await api.get('/api/products/live-search', {
-      params: { keyword: keyword.value.trim(), category: category.value, n: 24 },
+      params: { keyword: keyword.value.trim(), category: category.value, n: 36 },
       timeout: 90000, // 实时爬取慢慢买，给足超时
     })
     allItems.value = data.items
@@ -485,7 +485,7 @@ onUnmounted(() => {
 }
 .sk-card { padding: 12px 14px; pointer-events: none; }
 .sk-img {
-  height: 160px; border: 1px solid var(--line); border-radius: 2px;
+  aspect-ratio: 1 / 1; border: 1px solid var(--line); border-radius: 2px;
   background: var(--paper-3); animation: sk-pulse 1.1s ease-in-out infinite;
 }
 .sk-line {
@@ -502,13 +502,13 @@ onUnmounted(() => {
   50% { opacity: .45; }
 }
 .grid {
-  display: grid; grid-template-columns: repeat(6, 1fr);
+  display: grid; grid-template-columns: repeat(9, 1fr);
   gap: 16px; min-height: 200px;
 }
 .item {
   cursor: pointer;
   padding: 12px 14px 12px;
-  transition: transform .18s, box-shadow .18s;
+  transition: box-shadow .25s; /* transform 由 GSAP tiltCard 驱动，避免叠加拖影 */
 }
 .item:hover { box-shadow: var(--shadow-lg); }
 .item::after {
@@ -527,7 +527,7 @@ onUnmounted(() => {
   color: var(--ink-faint); margin-bottom: 8px;
 }
 .img-wrap {
-  height: 160px;
+  aspect-ratio: 1 / 1; /* 随卡宽等比缩放（缩放自适应） */
   display: flex; align-items: center; justify-content: center;
   background: var(--paper-3);
   border: 1px solid var(--line);
@@ -536,7 +536,12 @@ onUnmounted(() => {
   overflow: hidden;
   padding: 8px;
 }
-.img-wrap img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.img-wrap img {
+  max-width: 100%; max-height: 100%; object-fit: contain;
+  transition: transform .45s cubic-bezier(.2, .7, .3, 1);
+}
+/* 悬停图片放大（3D 悬浮配套效果，img-wrap overflow 裁切） */
+.item:hover .img-wrap img { transform: scale(1.12); }
 .name {
   margin: 10px 0 6px;
   font-family: var(--serif); font-size: 14px; line-height: 1.45;
@@ -561,8 +566,14 @@ onUnmounted(() => {
 .deco-magnifier-head { width: 95px; top: -6px; right: 2px; opacity: 0.8; transform: rotate(-8deg); }
 .deco-maple-shelf { width: 95px; top: -12px; right: 4px; opacity: 0.8; transform: rotate(10deg); }
 
-@media (max-width: 1280px) {
+/* 缩放自适应：窗口/缩放小于全屏宽度后按卡宽自动降列，保证卡片不被挤压 */
+@media (max-width: 1800px) {
   .grid { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }
+}
+@media (max-width: 1440px) {
   .idx-sort { margin-left: 0; }
+}
+@media (max-width: 900px) {
+  .grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
 }
 </style>

@@ -133,21 +133,30 @@ export function magnetic(el: HTMLElement | null) {
   })
 }
 
-/** 卡片 3D 倾斜 + 光斑跟随 */
+/** 卡片 3D 悬浮：悬停浮起 + 跟随鼠标倾斜 + 光斑跟随 */
 export function tiltCard(el: HTMLElement | null) {
   if (!el || reducedMotion) return
   const xTo = gsap.quickTo(el, 'rotationY', { duration: 0.4, ease: 'power3.out' })
   const yTo = gsap.quickTo(el, 'rotationX', { duration: 0.4, ease: 'power3.out' })
+  const liftTo = gsap.quickTo(el, 'y', { duration: 0.35, ease: 'power2.out' })
+  const scaleTo = gsap.quickTo(el, 'scale', { duration: 0.35, ease: 'power2.out' })
   gsap.set(el, { transformPerspective: 800 })
+  el.addEventListener('mouseenter', () => {
+    liftTo(-10) // 悬停浮起
+    scaleTo(1.03)
+  })
   el.addEventListener('mousemove', (e: MouseEvent) => {
     const r = el.getBoundingClientRect()
-    xTo(((e.clientX - r.left) / r.width - 0.5) * 8)
-    yTo(-((e.clientY - r.top) / r.height - 0.5) * 8)
+    xTo(((e.clientX - r.left) / r.width - 0.5) * 12) // 倾斜角度跟随鼠标
+    yTo(-((e.clientY - r.top) / r.height - 0.5) * 12)
     el.style.setProperty('--gx', `${((e.clientX - r.left) / r.width) * 100}%`)
     el.style.setProperty('--gy', `${((e.clientY - r.top) / r.height) * 100}%`)
   })
   el.addEventListener('mouseleave', () => {
-    gsap.to(el, { rotationX: 0, rotationY: 0, duration: 0.7, ease: 'back.out(1.7)' })
+    gsap.to(el, {
+      rotationX: 0, rotationY: 0, y: 0, scale: 1,
+      duration: 0.7, ease: 'back.out(1.7)',
+    })
   })
 }
 
