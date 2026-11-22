@@ -100,7 +100,10 @@
         <div class="layout-paper">
           <router-view v-slot="{ Component }">
             <transition name="layout-page" mode="out-in">
-              <component :is="Component" />
+              <!-- 商品查询页保持存活：切走再回来不重新拉数据、不重置筛选状态 -->
+              <keep-alive include="Home">
+                <component :is="Component" />
+              </keep-alive>
             </transition>
           </router-view>
         </div>

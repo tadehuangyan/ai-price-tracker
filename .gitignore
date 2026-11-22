@@ -44,7 +44,9 @@ venv/
 ### 数据与运行时产物 ###
 backend/ms-playwright/
 backend/storage/uploads/
+backend/storage/profiles/
 *.db
+*.bak
 
 ### Node / 前端 ###
 node_modules/

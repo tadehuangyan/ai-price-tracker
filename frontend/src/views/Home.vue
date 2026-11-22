@@ -39,6 +39,16 @@
         <el-button size="large" class="mag-btn vis-btn" @click="pickVisionImage">
           <el-icon style="margin-right: 4px"><Camera /></el-icon>识图找同款
         </el-button>
+        <el-tooltip content="重新抓取最新商品与价格" placement="top">
+          <el-button
+            size="large"
+            class="mag-btn refresh-btn"
+            :loading="loading"
+            @click="search(1, true)"
+          >
+            <el-icon style="margin-right: 4px"><Refresh /></el-icon>刷新
+          </el-button>
+        </el-tooltip>
       </div>
       <!-- 索引卡：分类 / 排序 -->
       <div class="filters">
@@ -164,7 +174,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+// 组件命名：供 Layout 的 <keep-alive include="Home"> 匹配，切页时保持存活不重载
+defineOptions({ name: 'Home' })
+
+import { computed, nextTick, onActivated, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { ScrollTrigger } from 'gsap/ScrollTrigger'
@@ -261,12 +274,18 @@ function onSubmit() {
 }
 
 // 实时从慢慢买获取商品列表（关键词走比价搜索，分类/默认走全网折扣分类页）
-async function search(p = 1) {
+// force=true 时带 refresh=1 绕过缓存强制重抓（刷新按钮用）
+async function search(p = 1, force = false) {
   page.value = p
   loading.value = true
   try {
     const { data } = await api.get('/api/products/live-search', {
-      params: { keyword: keyword.value.trim(), category: category.value, n: 36 },
+      params: {
+        keyword: keyword.value.trim(),
+        category: category.value,
+        n: 36,
+        ...(force ? { refresh: 1 } : {}),
+      },
       timeout: 90000, // 实时爬取慢慢买，给足超时
     })
     allItems.value = data.items
@@ -388,6 +407,12 @@ onMounted(() => {
   loadCategories()
 })
 
+// keep-alive 切回本页：不重新拉数据（沿用切走前的列表/筛选），
+// 只校准滚动动效位置即可
+onActivated(() => {
+  refreshScroll()
+})
+
 // 页面卸载时清理本页的 ScrollTrigger，避免动效监听泄漏到其他页面
 onUnmounted(() => {
   const root = pageRef.value
@@ -414,6 +439,7 @@ onUnmounted(() => {
 .search-row { display: flex; align-items: stretch; gap: 10px; }
 .search-row :deep(.el-input) { flex: 1; }
 .vis-btn { flex-shrink: 0; letter-spacing: 0.1em; }
+.refresh-btn { flex-shrink: 0; letter-spacing: 0.1em; }
 
 /* —— 识图找同款 —— */
 .vision-loading { display: flex; align-items: center; gap: 5px; height: 40px; }
