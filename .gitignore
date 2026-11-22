@@ -67,5 +67,6 @@ miniapp/
 *.docx
 *.zip
 template6_text.txt
+最终交付物/
 ### IDE ###
 .idea/
